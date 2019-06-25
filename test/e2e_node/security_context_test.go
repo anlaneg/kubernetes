@@ -26,7 +26,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 
 	. "github.com/onsi/ginkgo"
 	imageutils "k8s.io/kubernetes/test/utils/image"
@@ -37,6 +41,78 @@ var _ = framework.KubeDescribe("Security Context", func() {
 	var podClient *framework.PodClient
 	BeforeEach(func() {
 		podClient = f.PodClient()
+	})
+
+	Context("when pod PID namespace is configurable [Feature:ShareProcessNamespace][NodeAlphaFeature:ShareProcessNamespace]", func() {
+		It("containers in pods using isolated PID namespaces should all receive PID 1", func() {
+			By("Create a pod with isolated PID namespaces.")
+			f.PodClient().CreateSync(&v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "isolated-pid-ns-test-pod"},
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:    "test-container-1",
+							Image:   imageutils.GetE2EImage(imageutils.BusyBox),
+							Command: []string{"/bin/top"},
+						},
+						{
+							Name:    "test-container-2",
+							Image:   imageutils.GetE2EImage(imageutils.BusyBox),
+							Command: []string{"/bin/sleep"},
+							Args:    []string{"10000"},
+						},
+					},
+				},
+			})
+
+			By("Check if both containers receive PID 1.")
+			pid1 := f.ExecCommandInContainer("isolated-pid-ns-test-pod", "test-container-1", "/bin/pidof", "top")
+			pid2 := f.ExecCommandInContainer("isolated-pid-ns-test-pod", "test-container-2", "/bin/pidof", "sleep")
+			if pid1 != "1" || pid2 != "1" {
+				e2elog.Failf("PIDs of different containers are not all 1: test-container-1=%v, test-container-2=%v", pid1, pid2)
+			}
+		})
+
+		It("processes in containers sharing a pod namespace should be able to see each other [Alpha]", func() {
+			By("Check whether shared PID namespace is supported.")
+			isEnabled, err := isSharedPIDNamespaceSupported()
+			framework.ExpectNoError(err)
+			if !isEnabled {
+				framework.Skipf("Skipped because shared PID namespace is not supported by this docker version.")
+			}
+			// It's not enough to set this flag in the kubelet because the apiserver needs it too
+			if !utilfeature.DefaultFeatureGate.Enabled(features.PodShareProcessNamespace) {
+				framework.Skipf("run test with --feature-gates=PodShareProcessNamespace=true to test PID namespace sharing")
+			}
+
+			By("Create a pod with shared PID namespace.")
+			f.PodClient().CreateSync(&v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "shared-pid-ns-test-pod"},
+				Spec: v1.PodSpec{
+					ShareProcessNamespace: &[]bool{true}[0],
+					Containers: []v1.Container{
+						{
+							Name:    "test-container-1",
+							Image:   imageutils.GetE2EImage(imageutils.BusyBox),
+							Command: []string{"/bin/top"},
+						},
+						{
+							Name:    "test-container-2",
+							Image:   imageutils.GetE2EImage(imageutils.BusyBox),
+							Command: []string{"/bin/sleep"},
+							Args:    []string{"10000"},
+						},
+					},
+				},
+			})
+
+			By("Check if the process in one container is visible to the process in the other.")
+			pid1 := f.ExecCommandInContainer("shared-pid-ns-test-pod", "test-container-1", "/bin/pidof", "top")
+			pid2 := f.ExecCommandInContainer("shared-pid-ns-test-pod", "test-container-2", "/bin/pidof", "top")
+			if pid1 != pid2 {
+				e2elog.Failf("PIDs are not the same in different containers: test-container-1=%v, test-container-2=%v", pid1, pid2)
+			}
+		})
 	})
 
 	Context("when creating a pod in the host PID namespace", func() {
@@ -72,7 +148,7 @@ var _ = framework.KubeDescribe("Security Context", func() {
 		BeforeEach(func() {
 			nginxPodName := "nginx-hostpid-" + string(uuid.NewUUID())
 			podClient.CreateSync(makeHostPidPod(nginxPodName,
-				imageutils.GetE2EImage(imageutils.NginxSlim),
+				imageutils.GetE2EImage(imageutils.Nginx),
 				nil,
 				true,
 			))
@@ -82,39 +158,39 @@ var _ = framework.KubeDescribe("Security Context", func() {
 			nginxPid = strings.TrimSpace(output)
 		})
 
-		It("should show its pid in the host PID namespace", func() {
+		It("should show its pid in the host PID namespace [NodeFeature:HostAccess]", func() {
 			busyboxPodName := "busybox-hostpid-" + string(uuid.NewUUID())
 			createAndWaitHostPidPod(busyboxPodName, true)
-			logs, err := framework.GetPodLogs(f.ClientSet, f.Namespace.Name, busyboxPodName, busyboxPodName)
+			logs, err := e2epod.GetPodLogs(f.ClientSet, f.Namespace.Name, busyboxPodName, busyboxPodName)
 			if err != nil {
-				framework.Failf("GetPodLogs for pod %q failed: %v", busyboxPodName, err)
+				e2elog.Failf("GetPodLogs for pod %q failed: %v", busyboxPodName, err)
 			}
 
 			pids := strings.TrimSpace(logs)
-			framework.Logf("Got nginx's pid %q from pod %q", pids, busyboxPodName)
+			e2elog.Logf("Got nginx's pid %q from pod %q", pids, busyboxPodName)
 			if pids == "" {
-				framework.Failf("nginx's pid should be seen by hostpid containers")
+				e2elog.Failf("nginx's pid should be seen by hostpid containers")
 			}
 
 			pidSets := sets.NewString(strings.Split(pids, " ")...)
 			if !pidSets.Has(nginxPid) {
-				framework.Failf("nginx's pid should be seen by hostpid containers")
+				e2elog.Failf("nginx's pid should be seen by hostpid containers")
 			}
 		})
 
-		It("should not show its pid in the non-hostpid containers", func() {
+		It("should not show its pid in the non-hostpid containers [NodeFeature:HostAccess]", func() {
 			busyboxPodName := "busybox-non-hostpid-" + string(uuid.NewUUID())
 			createAndWaitHostPidPod(busyboxPodName, false)
-			logs, err := framework.GetPodLogs(f.ClientSet, f.Namespace.Name, busyboxPodName, busyboxPodName)
+			logs, err := e2epod.GetPodLogs(f.ClientSet, f.Namespace.Name, busyboxPodName, busyboxPodName)
 			if err != nil {
-				framework.Failf("GetPodLogs for pod %q failed: %v", busyboxPodName, err)
+				e2elog.Failf("GetPodLogs for pod %q failed: %v", busyboxPodName, err)
 			}
 
 			pids := strings.TrimSpace(logs)
-			framework.Logf("Got nginx's pid %q from pod %q", pids, busyboxPodName)
+			e2elog.Logf("Got nginx's pid %q from pod %q", pids, busyboxPodName)
 			pidSets := sets.NewString(strings.Split(pids, " ")...)
 			if pidSets.Has(nginxPid) {
-				framework.Failf("nginx's pid should not be seen by non-hostpid containers")
+				e2elog.Failf("nginx's pid should not be seen by non-hostpid containers")
 			}
 		})
 	})
@@ -140,7 +216,7 @@ var _ = framework.KubeDescribe("Security Context", func() {
 		}
 		createAndWaitHostIPCPod := func(podName string, hostNetwork bool) {
 			podClient.Create(makeHostIPCPod(podName,
-				busyboxImage,
+				imageutils.GetE2EImage(imageutils.IpcUtils),
 				[]string{"sh", "-c", "ipcs -m | awk '{print $2}'"},
 				hostNetwork,
 			))
@@ -150,41 +226,41 @@ var _ = framework.KubeDescribe("Security Context", func() {
 
 		hostSharedMemoryID := ""
 		BeforeEach(func() {
-			output, err := exec.Command("sh", "-c", "ipcmk -M 1M | awk '{print $NF}'").Output()
+			output, err := exec.Command("sh", "-c", "ipcmk -M 1048576 | awk '{print $NF}'").Output()
 			if err != nil {
-				framework.Failf("Failed to create the shared memory on the host: %v", err)
+				e2elog.Failf("Failed to create the shared memory on the host: %v", err)
 			}
 			hostSharedMemoryID = strings.TrimSpace(string(output))
-			framework.Logf("Got host shared memory ID %q", hostSharedMemoryID)
+			e2elog.Logf("Got host shared memory ID %q", hostSharedMemoryID)
 		})
 
-		It("should show the shared memory ID in the host IPC containers", func() {
-			busyboxPodName := "busybox-hostipc-" + string(uuid.NewUUID())
-			createAndWaitHostIPCPod(busyboxPodName, true)
-			logs, err := framework.GetPodLogs(f.ClientSet, f.Namespace.Name, busyboxPodName, busyboxPodName)
+		It("should show the shared memory ID in the host IPC containers [NodeFeature:HostAccess]", func() {
+			ipcutilsPodName := "ipcutils-hostipc-" + string(uuid.NewUUID())
+			createAndWaitHostIPCPod(ipcutilsPodName, true)
+			logs, err := e2epod.GetPodLogs(f.ClientSet, f.Namespace.Name, ipcutilsPodName, ipcutilsPodName)
 			if err != nil {
-				framework.Failf("GetPodLogs for pod %q failed: %v", busyboxPodName, err)
+				e2elog.Failf("GetPodLogs for pod %q failed: %v", ipcutilsPodName, err)
 			}
 
 			podSharedMemoryIDs := strings.TrimSpace(logs)
-			framework.Logf("Got shared memory IDs %q from pod %q", podSharedMemoryIDs, busyboxPodName)
+			e2elog.Logf("Got shared memory IDs %q from pod %q", podSharedMemoryIDs, ipcutilsPodName)
 			if !strings.Contains(podSharedMemoryIDs, hostSharedMemoryID) {
-				framework.Failf("hostIPC container should show shared memory IDs on host")
+				e2elog.Failf("hostIPC container should show shared memory IDs on host")
 			}
 		})
 
-		It("should not show the shared memory ID in the non-hostIPC containers", func() {
-			busyboxPodName := "busybox-non-hostipc-" + string(uuid.NewUUID())
-			createAndWaitHostIPCPod(busyboxPodName, false)
-			logs, err := framework.GetPodLogs(f.ClientSet, f.Namespace.Name, busyboxPodName, busyboxPodName)
+		It("should not show the shared memory ID in the non-hostIPC containers [NodeFeature:HostAccess]", func() {
+			ipcutilsPodName := "ipcutils-non-hostipc-" + string(uuid.NewUUID())
+			createAndWaitHostIPCPod(ipcutilsPodName, false)
+			logs, err := e2epod.GetPodLogs(f.ClientSet, f.Namespace.Name, ipcutilsPodName, ipcutilsPodName)
 			if err != nil {
-				framework.Failf("GetPodLogs for pod %q failed: %v", busyboxPodName, err)
+				e2elog.Failf("GetPodLogs for pod %q failed: %v", ipcutilsPodName, err)
 			}
 
 			podSharedMemoryIDs := strings.TrimSpace(logs)
-			framework.Logf("Got shared memory IDs %q from pod %q", podSharedMemoryIDs, busyboxPodName)
+			e2elog.Logf("Got shared memory IDs %q from pod %q", podSharedMemoryIDs, ipcutilsPodName)
 			if strings.Contains(podSharedMemoryIDs, hostSharedMemoryID) {
-				framework.Failf("non-hostIPC container should not show shared memory IDs on host")
+				e2elog.Failf("non-hostIPC container should not show shared memory IDs on host")
 			}
 		})
 
@@ -192,7 +268,7 @@ var _ = framework.KubeDescribe("Security Context", func() {
 			if hostSharedMemoryID != "" {
 				_, err := exec.Command("sh", "-c", fmt.Sprintf("ipcrm -m %q", hostSharedMemoryID)).Output()
 				if err != nil {
-					framework.Failf("Failed to remove shared memory %q on the host: %v", hostSharedMemoryID, err)
+					e2elog.Failf("Failed to remove shared memory %q on the host: %v", hostSharedMemoryID, err)
 				}
 			}
 		})
@@ -230,206 +306,48 @@ var _ = framework.KubeDescribe("Security Context", func() {
 
 		listeningPort := ""
 		var l net.Listener
+		var err error
 		BeforeEach(func() {
-			l, err := net.Listen("tcp", ":0")
+			l, err = net.Listen("tcp", ":0")
 			if err != nil {
-				framework.Failf("Failed to open a new tcp port: %v", err)
+				e2elog.Failf("Failed to open a new tcp port: %v", err)
 			}
 			addr := strings.Split(l.Addr().String(), ":")
 			listeningPort = addr[len(addr)-1]
-			framework.Logf("Opened a new tcp port %q", listeningPort)
+			e2elog.Logf("Opened a new tcp port %q", listeningPort)
 		})
 
-		It("should listen on same port in the host network containers", func() {
+		It("should listen on same port in the host network containers [NodeFeature:HostAccess]", func() {
 			busyboxPodName := "busybox-hostnetwork-" + string(uuid.NewUUID())
 			createAndWaitHostNetworkPod(busyboxPodName, true)
-			logs, err := framework.GetPodLogs(f.ClientSet, f.Namespace.Name, busyboxPodName, busyboxPodName)
+			logs, err := e2epod.GetPodLogs(f.ClientSet, f.Namespace.Name, busyboxPodName, busyboxPodName)
 			if err != nil {
-				framework.Failf("GetPodLogs for pod %q failed: %v", busyboxPodName, err)
+				e2elog.Failf("GetPodLogs for pod %q failed: %v", busyboxPodName, err)
 			}
 
-			framework.Logf("Got logs for pod %q: %q", busyboxPodName, logs)
+			e2elog.Logf("Got logs for pod %q: %q", busyboxPodName, logs)
 			if !strings.Contains(logs, listeningPort) {
-				framework.Failf("host-networked container should listening on same port as host")
+				e2elog.Failf("host-networked container should listening on same port as host")
 			}
 		})
 
-		It("shouldn't show the same port in the non-hostnetwork containers", func() {
+		It("shouldn't show the same port in the non-hostnetwork containers [NodeFeature:HostAccess]", func() {
 			busyboxPodName := "busybox-non-hostnetwork-" + string(uuid.NewUUID())
 			createAndWaitHostNetworkPod(busyboxPodName, false)
-			logs, err := framework.GetPodLogs(f.ClientSet, f.Namespace.Name, busyboxPodName, busyboxPodName)
+			logs, err := e2epod.GetPodLogs(f.ClientSet, f.Namespace.Name, busyboxPodName, busyboxPodName)
 			if err != nil {
-				framework.Failf("GetPodLogs for pod %q failed: %v", busyboxPodName, err)
+				e2elog.Failf("GetPodLogs for pod %q failed: %v", busyboxPodName, err)
 			}
 
-			framework.Logf("Got logs for pod %q: %q", busyboxPodName, logs)
+			e2elog.Logf("Got logs for pod %q: %q", busyboxPodName, logs)
 			if strings.Contains(logs, listeningPort) {
-				framework.Failf("non-hostnetworked container shouldn't show the same port as host")
+				e2elog.Failf("non-hostnetworked container shouldn't show the same port as host")
 			}
 		})
 
 		AfterEach(func() {
 			if l != nil {
 				l.Close()
-			}
-		})
-	})
-
-	Context("When creating a container with runAsUser", func() {
-		makeUserPod := func(podName, image string, command []string, userid int64) *v1.Pod {
-			return &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: podName,
-				},
-				Spec: v1.PodSpec{
-					RestartPolicy: v1.RestartPolicyNever,
-					Containers: []v1.Container{
-						{
-							Image:   image,
-							Name:    podName,
-							Command: command,
-							SecurityContext: &v1.SecurityContext{
-								RunAsUser: &userid,
-							},
-						},
-					},
-				},
-			}
-		}
-		createAndWaitUserPod := func(userid int64) {
-			podName := fmt.Sprintf("busybox-user-%d-%s", userid, uuid.NewUUID())
-			podClient.Create(makeUserPod(podName,
-				busyboxImage,
-				[]string{"sh", "-c", fmt.Sprintf("test $(id -u) -eq %d", userid)},
-				userid,
-			))
-
-			podClient.WaitForSuccess(podName, framework.PodStartTimeout)
-		}
-
-		It("should run the container with uid 65534", func() {
-			createAndWaitUserPod(65534)
-		})
-
-		It("should run the container with uid 0", func() {
-			createAndWaitUserPod(0)
-		})
-	})
-
-	Context("When creating a pod with readOnlyRootFilesystem", func() {
-		makeUserPod := func(podName, image string, command []string, readOnlyRootFilesystem bool) *v1.Pod {
-			return &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: podName,
-				},
-				Spec: v1.PodSpec{
-					RestartPolicy: v1.RestartPolicyNever,
-					Containers: []v1.Container{
-						{
-							Image:   image,
-							Name:    podName,
-							Command: command,
-							SecurityContext: &v1.SecurityContext{
-								ReadOnlyRootFilesystem: &readOnlyRootFilesystem,
-							},
-						},
-					},
-				},
-			}
-		}
-		createAndWaitUserPod := func(readOnlyRootFilesystem bool) string {
-			podName := fmt.Sprintf("busybox-readonly-%v-%s", readOnlyRootFilesystem, uuid.NewUUID())
-			podClient.Create(makeUserPod(podName,
-				imageutils.GetBusyBoxImage(),
-				[]string{"sh", "-c", "touch checkfile"},
-				readOnlyRootFilesystem,
-			))
-
-			if readOnlyRootFilesystem {
-				podClient.WaitForFailure(podName, framework.PodStartTimeout)
-			} else {
-				podClient.WaitForSuccess(podName, framework.PodStartTimeout)
-			}
-
-			return podName
-		}
-
-		It("should run the container with readonly rootfs when readOnlyRootFilesystem=true", func() {
-			createAndWaitUserPod(true)
-		})
-
-		It("should run the container with writable rootfs when readOnlyRootFilesystem=false", func() {
-			createAndWaitUserPod(false)
-		})
-	})
-
-	Context("when creating containers with AllowPrivilegeEscalation", func() {
-
-		BeforeEach(func() {
-			if framework.TestContext.ContainerRuntime == "docker" {
-				isSupported, err := isDockerNoNewPrivilegesSupported()
-				framework.ExpectNoError(err)
-				if !isSupported {
-					framework.Skipf("Skipping because no_new_privs is not supported in this docker")
-				}
-			}
-		})
-
-		makeAllowPrivilegeEscalationPod := func(podName string, allowPrivilegeEscalation *bool, uid int64) *v1.Pod {
-			return &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: podName,
-				},
-				Spec: v1.PodSpec{
-					RestartPolicy: v1.RestartPolicyNever,
-					Containers: []v1.Container{
-						{
-							Image: "gcr.io/google_containers/nonewprivs:1.2",
-							Name:  podName,
-							SecurityContext: &v1.SecurityContext{
-								AllowPrivilegeEscalation: allowPrivilegeEscalation,
-								RunAsUser:                &uid,
-							},
-						},
-					},
-				},
-			}
-		}
-		createAndMatchOutput := func(podName, output string, allowPrivilegeEscalation *bool, uid int64) error {
-			podClient.Create(makeAllowPrivilegeEscalationPod(podName,
-				allowPrivilegeEscalation,
-				uid,
-			))
-
-			podClient.WaitForSuccess(podName, framework.PodStartTimeout)
-
-			if err := podClient.MatchContainerOutput(podName, podName, output); err != nil {
-				return err
-			}
-
-			return nil
-		}
-
-		It("should allow privilege escalation when not explicitly set and uid != 0", func() {
-			podName := "alpine-nnp-nil-" + string(uuid.NewUUID())
-			if err := createAndMatchOutput(podName, "Effective uid: 0", nil, 1000); err != nil {
-				framework.Failf("Match output for pod %q failed: %v", podName, err)
-			}
-		})
-
-		It("should not allow privilege escalation when false", func() {
-			podName := "alpine-nnp-false-" + string(uuid.NewUUID())
-			apeFalse := false
-			if err := createAndMatchOutput(podName, "Effective uid: 1000", &apeFalse, 1000); err != nil {
-				framework.Failf("Match output for pod %q failed: %v", podName, err)
-			}
-		})
-
-		It("should allow privilege escalation when true", func() {
-			podName := "alpine-nnp-true-" + string(uuid.NewUUID())
-			apeTrue := true
-			if err := createAndMatchOutput(podName, "Effective uid: 0", &apeTrue, 1000); err != nil {
-				framework.Failf("Match output for pod %q failed: %v", podName, err)
 			}
 		})
 	})
@@ -462,37 +380,21 @@ var _ = framework.KubeDescribe("Security Context", func() {
 				[]string{"sh", "-c", "ip link add dummy0 type dummy || true"},
 				privileged,
 			))
-
 			podClient.WaitForSuccess(podName, framework.PodStartTimeout)
-
 			return podName
 		}
 
-		It("should run the container as privileged when true", func() {
+		It("should run the container as privileged when true [NodeFeature:HostAccess]", func() {
 			podName := createAndWaitUserPod(true)
-			logs, err := framework.GetPodLogs(f.ClientSet, f.Namespace.Name, podName, podName)
+			logs, err := e2epod.GetPodLogs(f.ClientSet, f.Namespace.Name, podName, podName)
 			if err != nil {
-				framework.Failf("GetPodLogs for pod %q failed: %v", podName, err)
+				e2elog.Failf("GetPodLogs for pod %q failed: %v", podName, err)
 			}
 
-			framework.Logf("Got logs for pod %q: %q", podName, logs)
+			e2elog.Logf("Got logs for pod %q: %q", podName, logs)
 			if strings.Contains(logs, "Operation not permitted") {
-				framework.Failf("privileged container should be able to create dummy device")
-			}
-		})
-
-		It("should run the container as unprivileged when false", func() {
-			podName := createAndWaitUserPod(false)
-			logs, err := framework.GetPodLogs(f.ClientSet, f.Namespace.Name, podName, podName)
-			if err != nil {
-				framework.Failf("GetPodLogs for pod %q failed: %v", podName, err)
-			}
-
-			framework.Logf("Got logs for pod %q: %q", podName, logs)
-			if !strings.Contains(logs, "Operation not permitted") {
-				framework.Failf("unprivileged container shouldn't be able to create dummy device")
+				e2elog.Failf("privileged container should be able to create dummy device")
 			}
 		})
 	})
-
 })

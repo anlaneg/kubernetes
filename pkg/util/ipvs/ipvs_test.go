@@ -188,10 +188,127 @@ func TestVirtualServerEqual(t *testing.T) {
 			equal:  true,
 			reason: "All fields equal",
 		},
+		{
+			svcA: &VirtualServer{
+				Address:   net.ParseIP("2012::beef"),
+				Protocol:  "TCP",
+				Port:      0,
+				Scheduler: "wrr",
+				Flags:     0,
+				Timeout:   0,
+			},
+			svcB: &VirtualServer{
+				Address:   net.ParseIP("2012::beeef"),
+				Protocol:  "SCTP",
+				Port:      0,
+				Scheduler: "wrr",
+				Flags:     0,
+				Timeout:   0,
+			},
+			equal:  false,
+			reason: "Protocol not equal",
+		},
+		{
+			svcA: &VirtualServer{
+				Address:   net.ParseIP("1.2.3.4"),
+				Protocol:  "SCTP",
+				Port:      80,
+				Scheduler: "rr",
+				Flags:     0x1,
+				Timeout:   10800,
+			},
+			svcB: &VirtualServer{
+				Address:   net.ParseIP("1.2.3.4"),
+				Protocol:  "SCTP",
+				Port:      80,
+				Scheduler: "rr",
+				Flags:     0x1,
+				Timeout:   10800,
+			},
+			equal:  true,
+			reason: "All fields equal",
+		},
 	}
 
 	for i := range Tests {
 		equal := Tests[i].svcA.Equal(Tests[i].svcB)
+		if equal != Tests[i].equal {
+			t.Errorf("case: %d got %v, expected %v, reason: %s", i, equal, Tests[i].equal, Tests[i].reason)
+		}
+	}
+}
+
+func TestRealServerEqual(t *testing.T) {
+	Tests := []struct {
+		rsA    *RealServer
+		rsB    *RealServer
+		equal  bool
+		reason string
+	}{
+		{
+			rsA: &RealServer{
+				Address: net.ParseIP("10.20.30.40"),
+				Port:    80,
+			},
+			rsB: &RealServer{
+				Address: net.ParseIP("10.20.30.41"),
+				Port:    80,
+			},
+			equal:  false,
+			reason: "IPv4 address not equal",
+		},
+		{
+			rsA: &RealServer{
+				Address: net.ParseIP("2012::beef"),
+				Port:    80,
+			},
+			rsB: &RealServer{
+				Address: net.ParseIP("2017::beef"),
+				Port:    80,
+			},
+			equal:  false,
+			reason: "IPv6 address not equal",
+		},
+		{
+			rsA: &RealServer{
+				Address: net.ParseIP("2012::beef"),
+				Port:    80,
+			},
+			rsB: &RealServer{
+				Address: net.ParseIP("2012::beef"),
+				Port:    8080,
+			},
+			equal:  false,
+			reason: "Port not equal",
+		},
+		{
+			rsA: &RealServer{
+				Address: net.ParseIP("1.2.3.4"),
+				Port:    3080,
+			},
+			rsB: &RealServer{
+				Address: net.ParseIP("1.2.3.4"),
+				Port:    3080,
+			},
+			equal:  true,
+			reason: "All fields equal",
+		},
+		{
+			rsA: &RealServer{
+				Address: net.ParseIP("2012::beef"),
+				Port:    3080,
+			},
+			rsB: &RealServer{
+				Address: net.ParseIP("2012::beef"),
+				Port:    3080,
+			},
+			equal:  true,
+			reason: "All fields equal",
+		},
+	}
+
+	for i := range Tests {
+		equal := Tests[i].rsA.Equal(Tests[i].rsB)
 		if equal != Tests[i].equal {
 			t.Errorf("case: %d got %v, expected %v, reason: %s", i, equal, Tests[i].equal, Tests[i].reason)
 		}

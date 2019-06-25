@@ -49,10 +49,10 @@ func TestValidateHost(t *testing.T) {
 
 func TestValidateProfile(t *testing.T) {
 	loadedProfiles := map[string]bool{
-		"docker-default":                                true,
-		"foo-bar":                                       true,
-		"baz":                                           true,
-		"/usr/sbin/ntpd":                                true,
+		"docker-default": true,
+		"foo-bar":        true,
+		"baz":            true,
+		"/usr/sbin/ntpd": true,
 		"/usr/lib/connman/scripts/dhclient-script":      true,
 		"/usr/lib/NetworkManager/nm-dhcp-client.action": true,
 		"/usr/bin/evince-previewer//sanitized_helper":   true,
@@ -63,6 +63,7 @@ func TestValidateProfile(t *testing.T) {
 	}{
 		{"", true},
 		{ProfileRuntimeDefault, true},
+		{ProfileNameUnconfined, true},
 		{"baz", false}, // Missing local prefix.
 		{ProfileNamePrefix + "/usr/sbin/ntpd", true},
 		{ProfileNamePrefix + "foo-bar", true},

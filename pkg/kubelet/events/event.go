@@ -27,6 +27,12 @@ const (
 	BackOffStartContainer   = "BackOff"
 	ExceededGracePeriod     = "ExceededGracePeriod"
 
+	// Pod event reason list
+	FailedToKillPod                = "FailedKillPod"
+	FailedToCreatePodContainer     = "FailedCreatePodContainer"
+	FailedToMakePodDataDirectories = "Failed"
+	NetworkNotReady                = "NetworkNotReady"
+
 	// Image event reason list
 	PullingImage            = "Pulling"
 	PulledImage             = "Pulled"
@@ -43,35 +49,31 @@ const (
 	StartingKubelet                      = "Starting"
 	KubeletSetupFailed                   = "KubeletSetupFailed"
 	FailedAttachVolume                   = "FailedAttachVolume"
-	FailedDetachVolume                   = "FailedDetachVolume"
 	FailedMountVolume                    = "FailedMount"
 	VolumeResizeFailed                   = "VolumeResizeFailed"
-	FailedUnMountVolume                  = "FailedUnMount"
+	VolumeResizeSuccess                  = "VolumeResizeSuccessful"
+	FileSystemResizeFailed               = "FileSystemResizeFailed"
+	FileSystemResizeSuccess              = "FileSystemResizeSuccessful"
+	FailedMapVolume                      = "FailedMapVolume"
 	WarnAlreadyMountedVolume             = "AlreadyMountedVolume"
-	SuccessfulDetachVolume               = "SuccessfulDetachVolume"
+	SuccessfulAttachVolume               = "SuccessfulAttachVolume"
 	SuccessfulMountVolume                = "SuccessfulMountVolume"
-	SuccessfulUnMountVolume              = "SuccessfulUnMountVolume"
-	HostPortConflict                     = "HostPortConflict"
-	NodeSelectorMismatching              = "NodeSelectorMismatching"
-	InsufficientFreeCPU                  = "InsufficientFreeCPU"
-	InsufficientFreeMemory               = "InsufficientFreeMemory"
-	HostNetworkNotSupported              = "HostNetworkNotSupported"
-	UndefinedShaper                      = "NilShaper"
 	NodeRebooted                         = "Rebooted"
 	ContainerGCFailed                    = "ContainerGCFailed"
 	ImageGCFailed                        = "ImageGCFailed"
 	FailedNodeAllocatableEnforcement     = "FailedNodeAllocatableEnforcement"
 	SuccessfulNodeAllocatableEnforcement = "NodeAllocatableEnforced"
-	UnsupportedMountOption               = "UnsupportedMountOption"
 	SandboxChanged                       = "SandboxChanged"
 	FailedCreatePodSandBox               = "FailedCreatePodSandBox"
+	FailedStatusPodSandBox               = "FailedPodSandBoxStatus"
 
 	// Image manager event reason list
 	InvalidDiskCapacity = "InvalidDiskCapacity"
 	FreeDiskSpaceFailed = "FreeDiskSpaceFailed"
 
 	// Probe event reason list
-	ContainerUnhealthy = "Unhealthy"
+	ContainerUnhealthy    = "Unhealthy"
+	ContainerProbeWarning = "ProbeWarning"
 
 	// Pod worker event reason list
 	FailedSync = "FailedSync"
@@ -80,7 +82,6 @@ const (
 	FailedValidation = "FailedValidation"
 
 	// Lifecycle hooks
-	FailedPostStartHook   = "FailedPostStartHook"
-	FailedPreStopHook     = "FailedPreStopHook"
-	UnfinishedPreStopHook = "UnfinishedPreStopHook"
+	FailedPostStartHook = "FailedPostStartHook"
+	FailedPreStopHook   = "FailedPreStopHook"
 )

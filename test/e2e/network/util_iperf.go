@@ -24,9 +24,10 @@ import (
 	"strconv"
 	"strings"
 
-	"k8s.io/kubernetes/test/e2e/framework"
+	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 )
 
+// IPerfResults is a struct that stores some IPerfResult
 type IPerfResults struct {
 	BandwidthMap map[string]int64
 }
@@ -56,22 +57,23 @@ func (i *IPerfResults) Add(ipr *IPerfResult) {
 // ToTSV exports an easily readable tab delimited format of all IPerfResults.
 func (i *IPerfResults) ToTSV() string {
 	if len(i.BandwidthMap) < 1 {
-		framework.Logf("Warning: no data in bandwidth map")
+		e2elog.Logf("Warning: no data in bandwidth map")
 	}
 
 	var buffer bytes.Buffer
 	for node, bandwidth := range i.BandwidthMap {
-		asJson, _ := json.Marshal(node)
-		buffer.WriteString("\t " + string(asJson) + "\t " + fmt.Sprintf("%E", float64(bandwidth)))
+		asJSON, _ := json.Marshal(node)
+		buffer.WriteString("\t " + string(asJSON) + "\t " + fmt.Sprintf("%E", float64(bandwidth)))
 	}
 	return buffer.String()
 }
 
 // NewIPerf parses an IPerf CSV output line into an IPerfResult.
 func NewIPerf(csvLine string) *IPerfResult {
+	csvLine = strings.Trim(csvLine, "\n")
 	slice := StrSlice(strings.Split(csvLine, ","))
 	if len(slice) != 9 {
-		framework.Failf("Incorrect fields in the output: %v (%v out of 9)", slice, len(slice))
+		e2elog.Failf("Incorrect fields in the output: %v (%v out of 9)", slice, len(slice))
 	}
 	i := IPerfResult{}
 	i.date = slice.get(0)
@@ -86,6 +88,7 @@ func NewIPerf(csvLine string) *IPerfResult {
 	return &i
 }
 
+// StrSlice represents a string slice
 type StrSlice []string
 
 func (s StrSlice) get(i int) string {
@@ -99,7 +102,7 @@ func (s StrSlice) get(i int) string {
 func intOrFail(debugName string, rawValue string) int64 {
 	value, err := strconv.ParseInt(rawValue, 10, 64)
 	if err != nil {
-		framework.Failf("Failed parsing value %v from the string '%v' as an integer", debugName, rawValue)
+		e2elog.Failf("Failed parsing value %v from the string '%v' as an integer", debugName, rawValue)
 	}
 	return value
 }

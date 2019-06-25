@@ -21,7 +21,10 @@ import (
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
-	"k8s.io/kubernetes/pkg/api"
+	api "k8s.io/kubernetes/pkg/apis/core"
+	"k8s.io/kubernetes/pkg/printers"
+	printersinternal "k8s.io/kubernetes/pkg/printers/internalversion"
+	printerstorage "k8s.io/kubernetes/pkg/printers/storage"
 	"k8s.io/kubernetes/pkg/registry/core/event"
 )
 
@@ -37,12 +40,7 @@ func NewREST(optsGetter generic.RESTOptionsGetter, ttl uint64) *REST {
 		panic(err) // TODO: Propagate error up
 	}
 
-	// We explicitly do NOT do any decoration here - switching on Cacher
-	// for events will lead to too high memory consumption.
-	opts.Decorator = generic.UndecoratedStorage // TODO use watchCacheSize=-1 to signal UndecoratedStorage
-
 	store := &genericregistry.Store{
-		Copier:        api.Scheme,
 		NewFunc:       func() runtime.Object { return &api.Event{} },
 		NewListFunc:   func() runtime.Object { return &api.EventList{} },
 		PredicateFunc: event.MatchEvent,
@@ -54,6 +52,8 @@ func NewREST(optsGetter generic.RESTOptionsGetter, ttl uint64) *REST {
 		CreateStrategy: event.Strategy,
 		UpdateStrategy: event.Strategy,
 		DeleteStrategy: event.Strategy,
+
+		TableConvertor: printerstorage.TableConvertor{TableGenerator: printers.NewTableGenerator().With(printersinternal.AddHandlers)},
 	}
 	options := &generic.StoreOptions{RESTOptions: opts, AttrFunc: event.GetAttrs} // Pass in opts to use UndecoratedStorage
 	if err := store.CompleteWithOptions(options); err != nil {

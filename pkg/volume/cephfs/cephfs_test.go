@@ -18,7 +18,7 @@ package cephfs
 
 import (
 	"os"
-	"path"
+	"path/filepath"
 	"testing"
 
 	"k8s.io/api/core/v1"
@@ -75,21 +75,19 @@ func TestPlugin(t *testing.T) {
 			},
 		},
 	}
-
 	mounter, err := plug.(*cephfsPlugin).newMounterInternal(volume.NewSpecFromVolume(spec), types.UID("poduid"), &mount.FakeMounter{}, "secrets")
-	volumePath := mounter.GetPath()
 	if err != nil {
 		t.Errorf("Failed to make a new Mounter: %v", err)
 	}
 	if mounter == nil {
 		t.Errorf("Got a nil Mounter")
 	}
-	volpath := path.Join(tmpDir, "pods/poduid/volumes/kubernetes.io~cephfs/vol1")
-	path := mounter.GetPath()
-	if path != volpath {
-		t.Errorf("Got unexpected path: %s", path)
+	volumePath := mounter.GetPath()
+	volpath := filepath.Join(tmpDir, "pods/poduid/volumes/kubernetes.io~cephfs/vol1")
+	if volumePath != volpath {
+		t.Errorf("Got unexpected path: %s", volumePath)
 	}
-	if err := mounter.SetUp(nil); err != nil {
+	if err := mounter.SetUp(volume.MounterArgs{}); err != nil {
 		t.Errorf("Expected success, got: %v", err)
 	}
 	if _, err := os.Stat(volumePath); err != nil {
@@ -112,7 +110,7 @@ func TestPlugin(t *testing.T) {
 	if _, err := os.Stat(volumePath); err == nil {
 		t.Errorf("TearDown() failed, volume path still exists: %s", volumePath)
 	} else if !os.IsNotExist(err) {
-		t.Errorf("SetUp() failed: %v", err)
+		t.Errorf("TearDown() failed: %v", err)
 	}
 }
 
@@ -224,5 +222,26 @@ func TestGetSecretNameAndNamespaceForPV(t *testing.T) {
 				err, resultNs, resultName)
 		}
 	}
+}
 
+func TestGetAccessModes(t *testing.T) {
+	tmpDir, err := utiltesting.MkTmpdir("cephfs_test")
+	if err != nil {
+		t.Fatalf("error creating temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	plugMgr := volume.VolumePluginMgr{}
+	plugMgr.InitPlugins(ProbeVolumePlugins(), nil /* prober */, volumetest.NewFakeVolumeHost(tmpDir, nil, nil))
+
+	plug, err := plugMgr.FindPersistentPluginByName("kubernetes.io/cephfs")
+	if err != nil {
+		t.Errorf("Can't find the plugin by name")
+	}
+	modes := plug.GetAccessModes()
+	for _, v := range modes {
+		if !volumetest.ContainsAccessMode(modes, v) {
+			t.Errorf("Expected AccessModeTypes: %s", v)
+		}
+	}
 }

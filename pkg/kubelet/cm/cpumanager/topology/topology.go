@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	cadvisorapi "github.com/google/cadvisor/info/v1"
+	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpuset"
 )
 
@@ -139,31 +140,57 @@ func (d CPUDetails) CPUsInCore(id int) cpuset.CPUSet {
 
 // Discover returns CPUTopology based on cadvisor node info
 func Discover(machineInfo *cadvisorapi.MachineInfo) (*CPUTopology, error) {
-
 	if machineInfo.NumCores == 0 {
 		return nil, fmt.Errorf("could not detect number of cpus")
 	}
 
 	CPUDetails := CPUDetails{}
-
-	numCPUs := machineInfo.NumCores
 	numPhysicalCores := 0
+
 	for _, socket := range machineInfo.Topology {
 		numPhysicalCores += len(socket.Cores)
 		for _, core := range socket.Cores {
-			for _, cpu := range core.Threads {
-				CPUDetails[cpu] = CPUInfo{
-					CoreID:   core.Id,
-					SocketID: socket.Id,
+			if coreID, err := getUniqueCoreID(core.Threads); err == nil {
+				for _, cpu := range core.Threads {
+					CPUDetails[cpu] = CPUInfo{
+						CoreID:   coreID,
+						SocketID: socket.Id,
+					}
 				}
+			} else {
+				klog.Errorf("could not get unique coreID for socket: %d core %d threads: %v",
+					socket.Id, core.Id, core.Threads)
+				return nil, err
 			}
 		}
 	}
 
 	return &CPUTopology{
-		NumCPUs:    numCPUs,
+		NumCPUs:    machineInfo.NumCores,
 		NumSockets: len(machineInfo.Topology),
 		NumCores:   numPhysicalCores,
 		CPUDetails: CPUDetails,
 	}, nil
+}
+
+// getUniqueCoreID computes coreId as the lowest cpuID
+// for a given Threads []int slice. This will assure that coreID's are
+// platform unique (opposite to what cAdvisor reports - socket unique)
+func getUniqueCoreID(threads []int) (coreID int, err error) {
+	if len(threads) == 0 {
+		return 0, fmt.Errorf("no cpus provided")
+	}
+
+	if len(threads) != cpuset.NewCPUSet(threads...).Size() {
+		return 0, fmt.Errorf("cpus provided are not unique")
+	}
+
+	min := threads[0]
+	for _, thread := range threads[1:] {
+		if thread < min {
+			min = thread
+		}
+	}
+
+	return min, nil
 }

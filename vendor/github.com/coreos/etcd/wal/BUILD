@@ -11,13 +11,9 @@ go_library(
         "repair.go",
         "util.go",
         "wal.go",
-        "wal_unix.go",
-    ] + select({
-        "@io_bazel_rules_go//go/platform:windows_amd64": [
-            "wal_windows.go",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
+    importmap = "k8s.io/kubernetes/vendor/github.com/coreos/etcd/wal",
+    importpath = "github.com/coreos/etcd/wal",
     visibility = ["//visibility:public"],
     deps = [
         "//vendor/github.com/coreos/etcd/pkg/crc:go_default_library",

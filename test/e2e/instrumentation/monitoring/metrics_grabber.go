@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 	"k8s.io/kubernetes/test/e2e/framework/metrics"
 	instrumentation "k8s.io/kubernetes/test/e2e/instrumentation/common"
 
@@ -32,7 +33,7 @@ import (
 var _ = instrumentation.SIGDescribe("MetricsGrabber", func() {
 	f := framework.NewDefaultFramework("metrics-grabber")
 	var c, ec clientset.Interface
-	var grabber *metrics.MetricsGrabber
+	var grabber *metrics.Grabber
 	gin.BeforeEach(func() {
 		var err error
 		c = f.ClientSet
@@ -44,7 +45,7 @@ var _ = instrumentation.SIGDescribe("MetricsGrabber", func() {
 
 	gin.It("should grab all metrics from API server.", func() {
 		gin.By("Connecting to /metrics endpoint")
-		response, err := grabber.GrabFromApiServer()
+		response, err := grabber.GrabFromAPIServer()
 		framework.ExpectNoError(err)
 		gom.Expect(response).NotTo(gom.BeEmpty())
 	})
@@ -61,7 +62,7 @@ var _ = instrumentation.SIGDescribe("MetricsGrabber", func() {
 	gin.It("should grab all metrics from a Scheduler.", func() {
 		gin.By("Proxying to Pod through the API server")
 		// Check if master Node is registered
-		nodes, err := c.Core().Nodes().List(metav1.ListOptions{})
+		nodes, err := c.CoreV1().Nodes().List(metav1.ListOptions{})
 		framework.ExpectNoError(err)
 
 		var masterRegistered = false
@@ -71,7 +72,7 @@ var _ = instrumentation.SIGDescribe("MetricsGrabber", func() {
 			}
 		}
 		if !masterRegistered {
-			framework.Logf("Master is node api.Registry. Skipping testing Scheduler metrics.")
+			e2elog.Logf("Master is node api.Registry. Skipping testing Scheduler metrics.")
 			return
 		}
 		response, err := grabber.GrabFromScheduler()
@@ -82,7 +83,7 @@ var _ = instrumentation.SIGDescribe("MetricsGrabber", func() {
 	gin.It("should grab all metrics from a ControllerManager.", func() {
 		gin.By("Proxying to Pod through the API server")
 		// Check if master Node is registered
-		nodes, err := c.Core().Nodes().List(metav1.ListOptions{})
+		nodes, err := c.CoreV1().Nodes().List(metav1.ListOptions{})
 		framework.ExpectNoError(err)
 
 		var masterRegistered = false
@@ -92,7 +93,7 @@ var _ = instrumentation.SIGDescribe("MetricsGrabber", func() {
 			}
 		}
 		if !masterRegistered {
-			framework.Logf("Master is node api.Registry. Skipping testing ControllerManager metrics.")
+			e2elog.Logf("Master is node api.Registry. Skipping testing ControllerManager metrics.")
 			return
 		}
 		response, err := grabber.GrabFromControllerManager()

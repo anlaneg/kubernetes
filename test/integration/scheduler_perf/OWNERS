@@ -1,14 +1,6 @@
+# See the OWNERS docs at https://go.k8s.io/owners
+
 approvers:
-- davidopp
-- gmarek
-- jayunit100
-- timothysc
-- wojtek-t
+- sig-scheduling-maintainers
 reviewers:
-- davidopp
-- jayunit100
-- k82cn
-- ravisantoshgudimetla
-- sjug
-- timothysc
-- wojtek-t
+- sig-scheduling
