@@ -68,6 +68,7 @@ type Cloud struct {
 	Addresses     []v1.NodeAddress
 	addressesMux  sync.Mutex
 	ExtID         map[types.NodeName]string
+	ExtIDErr      map[types.NodeName]error
 	InstanceTypes map[types.NodeName]string
 	Machines      []types.NodeName
 	NodeResources *v1.NodeResources
@@ -252,9 +253,17 @@ func (f *Cloud) NodeAddressesByProviderID(ctx context.Context, providerID string
 	return f.Addresses, f.Err
 }
 
-// InstanceID returns the cloud provider ID of the node with the specified Name.
+// InstanceID returns the cloud provider ID of the node with the specified Name, unless an entry
+// for the node exists in ExtIDError, in which case it returns the desired error (to facilitate
+// testing of error handling).
 func (f *Cloud) InstanceID(ctx context.Context, nodeName types.NodeName) (string, error) {
 	f.addCall("instance-id")
+
+	err, ok := f.ExtIDErr[nodeName]
+	if ok {
+		return "", err
+	}
+
 	return f.ExtID[nodeName], nil
 }
 
@@ -343,7 +352,7 @@ func (f *Cloud) CreateRoute(ctx context.Context, clusterName string, nameHint st
 	f.Lock.Lock()
 	defer f.Lock.Unlock()
 	f.addCall("create-route")
-	name := clusterName + "-" + nameHint
+	name := clusterName + "-" + string(route.TargetNode) + "-" + route.DestinationCIDR
 	if _, exists := f.RouteMap[name]; exists {
 		f.Err = fmt.Errorf("route %q already exists", name)
 		return f.Err
@@ -362,11 +371,21 @@ func (f *Cloud) DeleteRoute(ctx context.Context, clusterName string, route *clou
 	f.Lock.Lock()
 	defer f.Lock.Unlock()
 	f.addCall("delete-route")
-	name := route.Name
-	if _, exists := f.RouteMap[name]; !exists {
-		f.Err = fmt.Errorf("no route found with name %q", name)
+	name := ""
+	for key, saved := range f.RouteMap {
+		if route.DestinationCIDR == saved.Route.DestinationCIDR &&
+			route.TargetNode == saved.Route.TargetNode &&
+			clusterName == saved.ClusterName {
+			name = key
+			break
+		}
+	}
+
+	if len(name) == 0 {
+		f.Err = fmt.Errorf("no route found for node:%v with DestinationCIDR== %v", route.TargetNode, route.DestinationCIDR)
 		return f.Err
 	}
+
 	delete(f.RouteMap, name)
 	return nil
 }

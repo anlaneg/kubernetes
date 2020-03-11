@@ -10,10 +10,19 @@ information could retrieved through other means. To combat those differences,
 
 `agnhost` is an extendable CLI that behaves and outputs the same expected content,
 no matter the underlying OS. The name itself reflects this idea, being a portmanteau
-word of the words agnost and host.
+word of the words agnostic and host.
 
 The image was created for testing purposes, reducing the need for having different test
 cases for the same tested behaviour.
+
+
+## Developer notes
+
+We've introduced versioning into the `agnhost` binary for debugging purposes (e.g.: if the
+image and binary versions do not match, see [here](https://github.com/kubernetes/kubernetes/pull/79667#discussion_r304198370)).
+
+Whenever the image `VERSION` is bumped, the `Version` in `agnhost.go` will also have to be bumped.
+
 
 ## Usage
 
@@ -31,7 +40,7 @@ For example, let's consider the following `pod.yaml` file:
       containers:
       - args:
         - dns-suffix
-        image: gcr.io/kubernetes-e2e-test-images/agnhost:2.1
+        image: us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.11
         name: agnhost
       dnsConfig:
         nameservers:
@@ -65,6 +74,58 @@ created with the `pause` argument instead, allowing us execute multiple commands
 The `agnhost` binary is a CLI with the following subcommands:
 
 
+### audit-proxy
+
+The audit proxy is used to test dynamic auditing. It listens on port 8080 for incoming audit
+events and writes them in a uniform manner to stdout.
+
+Usage:
+
+```console
+    kubectl exec test-agnhost -- /agnhost audit-proxy
+```
+
+
+### connect
+
+Tries to open a TCP connection to the given host and port. On error it
+prints an error message prefixed with a specific fixed string that
+test cases can check for:
+
+* `UNKNOWN` - Generic/unknown (non-network) error (eg, bad arguments)
+* `TIMEOUT` - The connection attempt timed out
+* `DNS` - An error in DNS resolution
+* `REFUSED` - Connection refused
+* `OTHER` - Other networking error (eg, "no route to host")
+
+(Theoretically it would be nicer for it to distinguish these by exit
+code, but it's much easier for test programs to compare strings in the
+output than to check the exit code.)
+
+Usage:
+
+```console
+    kubectl exec test-agnost -- /agnost connect [--timeout=<duration>] <host>:<port>
+```
+
+
+### crd-conversion-webhook
+
+The subcommand tests `CustomResourceConversionWebhook`. After deploying it to Kubernetes cluster,
+the administrator needs to create a `CustomResourceConversion.Webhook` in Kubernetes cluster
+to use remote webhook for conversions.
+
+The subcommand starts a HTTP server, listening on port 443, and creating the `/crdconvert`
+endpoint.
+
+Usage
+
+```console
+    kubectl exec test-agnhost -- /agnhost crd-conversion-webhook \
+        [--tls-cert-file <tls-cert-file>] [--tls-private-key-file <tls-private-key-file>]
+```
+
+
 ### dns-server-list
 
 It will output the host's configured DNS servers, separated by commas.
@@ -87,6 +148,17 @@ Usage:
 ```
 
 
+### entrypoint-tester
+
+This subcommand will print the arguments it's passed and exists.
+
+Usage:
+
+```console
+    kubectl exec test-agnhost -- /agnhost entrypoint-tester foo lish args
+```
+
+
 ### etc-hosts
 
 It will output the contents of host's `hosts` file. This file's location is `/etc/hosts`
@@ -101,14 +173,51 @@ Usage:
 
 ### fake-gitserver
 
-Fakes a git server. When doing `git clone localhost:8000`, you will clone an empty git
-repo named `8000` on local. You can also use `git clone localhost:8000 my-repo-name` to
-rename that repo.
+Fakes a git server. When doing `git clone http://localhost:8000`, you will clone an empty git
+repo named `localhost` on local. You can also use `git clone http://localhost:8000 my-repo-name` to
+rename that repo. Access to the service with the backing pod will show you below information.
+
+```console
+curl -w "\n" http://localhost:8000
+I am a fake git server
+```
 
 Usage:
 
 ```console
     kubectl exec test-agnhost -- /agnhost fake-gitserver
+```
+
+
+### guestbook
+
+Starts a HTTP server on the given `--http-port` (default: 80), serving various endpoints representing a
+guestbook app. The endpoints and their purpose are:
+
+- `/register`: A guestbook slave will subscribe to a master, to its given `--slaveof` endpoint. The master
+  will then push any updates it receives to its registered slaves through the `--backend-port` (default: 6379).
+- `/get`: Returns `{"data": value}`, where the `value` is the stored value for the given `key` if non-empty,
+  or the entire store.
+- `/set`: Will set the given key-value pair in its own store and propagate it to its slaves, if any.
+  Will return `{"data": "Updated"}` to the caller on success.
+- `/guestbook`: Will proxy the request to `agnhost-master` if the given `cmd` is `set`, or `agnhost-slave`
+  if the given `cmd` is `get`.
+
+Usage:
+
+```console
+guestbook="test/e2e/testing-manifests/guestbook"
+sed_expr="s|{{.AgnhostImage}}|us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.11|"
+
+# create the services.
+kubectl create -f ${guestbook}/frontend-service.yaml
+kubectl create -f ${guestbook}/agnhost-master-service.yaml
+kubectl create -f ${guestbook}/agnhost-slave-service.yaml
+
+# create the deployments.
+cat ${guestbook}/frontend-deployment.yaml.in | sed ${sed_expr} | kubectl create -f -
+cat ${guestbook}/agnhost-master-deployment.yaml.in | sed ${sed_expr} | kubectl create -f -
+cat ${guestbook}/agnhost-slave-deployment.yaml.in | sed ${sed_expr} | kubectl create -f -
 ```
 
 
@@ -121,6 +230,22 @@ Usage:
 
 ```console
     kubectl exec test-agnhost -- /agnhost help
+```
+
+
+### inclusterclient
+
+The subcommand will periodically poll the Kubernetes `/healthz` endpoint using the in-cluster
+config. Because of this, the subcommand is meant to be run inside of a Kubernetes pod. It can
+also be used to validate token rotation.
+
+The given `--poll-interval` flag (default is 30 seconds) represents the poll interval in
+seconds of the call to `/healhz`.
+
+Usage:
+
+```console
+    kubectl exec test-agnhost -- /agnhost inclusterclient [--poll-interval <poll-interval>]
 ```
 
 
@@ -165,19 +290,50 @@ Examples:
 
 ```console
 docker run -i \
-  gcr.io/kubernetes-e2e-test-images/agnhost:2.1 \
+  us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.11 \
   logs-generator --log-lines-total 10 --run-duration 1s
 ```
 
 ```console
 kubectl run logs-generator \
   --generator=run-pod/v1 \
-  --image=gcr.io/kubernetes-e2e-test-images/agnhost:2.1 \
+  --image=us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.11 \
   --restart=Never \
   -- logs-generator -t 10 -d 1s
 ```
 
 [![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/test/images/logs-generator/README.md?pixel)]()
+
+
+### mounttest
+
+The `mounttest` subcommand can be used to create files with various permissions, read files,
+and output file system type, mode, owner, and permissions for any given file.
+
+The subcommand can accept the following flags:
+
+- `fs_type`: Path to print the FS type for.
+- `file_mode`: Path to print the mode bits of.
+- `file_perm`: Path to print the perms of.
+- `file_owner`: Path to print the owning UID and GID of.
+- `new_file_0644`: Path to write to and read from with perm 0644.
+- `new_file_0666`: Path to write to and read from with perm 0666.
+- `new_file_0660`: Path to write to and read from with perm 0660.
+- `new_file_0777`: Path to write to and read from with perm 0777.
+- `file_content`: Path to read the file content from.
+- `file_content_in_loop`: Path to read the file content in loop from.
+- `retry_time` (default: 180): Retry time during the loop.
+- `break_on_expected_content` (default: true): Break out of loop on expected content (use with `--file_content_in_loop` flag only).
+
+Usage:
+
+```console
+    kubectl exec test-agnhost -- /agnhost mounttest \
+        [--fs_type <path>] [--file_mode <path>] [--file_perm <path>] [--file_owner <path>] \
+        [--new_file_0644 <path>] [--new_file_0666 <path>] [--new_file_0660 <path>] [--new_file_0777 <path>] \
+        [--file_content <path>] [--file_content_in_loop <path>] \
+        [--retry_time <seconds>] [--break_on_expected_content <true_or_false>]
+```
 
 
 ### net
@@ -299,7 +455,7 @@ Usage:
 ```console
     kubectl run test-agnhost \
       --generator=run-pod/v1 \
-      --image=gcr.io/kubernetes-e2e-test-images/agnhost:2.1 \
+      --image=us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.11 \
       --restart=Never \
       --env "POD_IP=<POD_IP>" \
       --env "NODE_IP=<NODE_IP>" \
@@ -354,7 +510,7 @@ Usage:
 ```console
     kubectl run test-agnhost \
       --generator=run-pod/v1 \
-      --image=gcr.io/kubernetes-e2e-test-images/agnhost:2.1 \
+      --image=us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.11 \
       --restart=Never \
       --env "BIND_ADDRESS=localhost" \
       --env "BIND_PORT=8080" \
@@ -366,13 +522,98 @@ Usage:
 ```
 
 
+### porter
+
+Serves requested data on ports specified in ENV variables. For example, if the environment
+variable `SERVE_PORT_9001` is set, then the subcommand will start serving on the port 9001.
+Additionally, if the environment variable `SERVE_TLS_PORT_9002` is set, then the subcommand
+will start a TLS server on that port.
+
+The included `localhost.crt` is a PEM-encoded TLS cert with SAN IPs `127.0.0.1` and `[::1]`,
+expiring in January 2084, generated from `src/crypto/tls`:
+
+```console
+    go run generate_cert.go  --rsa-bits 2048 --host 127.0.0.1,::1,example.com --ca --start-date "Jan 1 00:00:00 1970" --duration=1000000h
+```
+
+To use a different cert/key, mount them into the pod and set the `CERT_FILE` and `KEY_FILE`
+environment variables to the desired paths.
+
+Usage:
+
+```console
+    kubectl exec test-agnhost -- /agnhost porter
+```
+
+[![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/test/images/porter/README.md?pixel)]()
+
+
+### resource-consumer-controller
+
+This subcommand starts an HTTP server that spreads requests around resource consumers. The HTTP server has the same endpoints and usage as the one spawned by the ``resource-consumer`` subcommand.
+
+The subcommand can accept the following flags:
+
+- `port` (default: 8080): The port number to listen to.
+- `consumer-port` (default: 8080): Port number of consumers.
+- `consumer-service-name` (default: `resource-consumer`): Name of service containing resource consumers.
+- `consumer-service-namespace` (default: `default`): Namespace of service containing resource consumers.
+
+Usage:
+
+```console
+    kubectl exec test-agnhost -- /agnhost resource-consumer-controller \
+        [--port <port>] [--consumer-port <port>] [--consumer-service-name <service-name>] [--consumer-service-namespace <namespace>]
+```
+
+
+### serve-hostname
+
+This is a small util app to serve your hostname on TCP and/or UDP. Useful for testing.
+
+The subcommand can accept the following flags:
+
+- `tcp` (default: `false`): Serve raw over TCP.
+- `udp` (default: `false`): Serve raw over UDP.
+- `http` (default: `true`): Serve HTTP.
+- `close` (default: `false`): Close connection per each HTTP request.
+- `port` (default: `9376`): The port number to listen to.
+
+Keep in mind that `--http` cannot be given at the same time as `--tcp` or `--udp`.
+
+Usage:
+
+```console
+    kubectl exec test-agnhost -- /agnhost serve-hostname [--tcp] [--udp] [--http] [--close] [--port <port>]
+```
+
+[![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/contrib/for-demos/serve_hostname/README.md?pixel)]()
+
+[![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/test/images/serve_hostname/README.md?pixel)]()
+
+
+### test-webserver
+
+Starts a simple HTTP fileserver which serves any file specified in the URL path, if it exists.
+
+The subcommand can accept the following flags:
+
+- `port` (default: `80`): The port number to listen to.
+
+Usage:
+
+```console
+    kubectl exec test-agnhost -- /agnhost test-webserver [--port <port>]
+```
+
+
 ### webhook (Kubernetes External Admission Webhook)
 
 The subcommand tests MutatingAdmissionWebhook and ValidatingAdmissionWebhook. After deploying
-it to kubernetes cluster, administrator needs to create a ValidatingWebhookConfiguration
-in kubernetes cluster to register remote webhook admission controllers.
+it to kubernetes cluster, administrator needs to create a MutatingWebhookConfiguration or
+ValidatingWebhookConfiguration in kubernetes cluster to register remote webhook admission controllers.
 
-TODO: add the reference when the document for admission webhook v1beta1 API is done.
+More details on the configuration can be found from here [Dynamic Admission Control](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/).
 
 Check the [MutatingAdmissionWebhook](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.14/#mutatingwebhookconfiguration-v1beta1-admissionregistration-k8s-io) and [ValidatingAdmissionWebhook](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.14/#validatingwebhookconfiguration-v1beta1-admissionregistration-k8s-io) documentations for more information about them.
 
@@ -382,8 +623,21 @@ Usage:
     kubectl exec test-agnhost -- /agnhost webhook [--tls-cert-file <key-file>] [--tls-private-key-file <cert-file>]
 ```
 
+
+## Other tools
+
+The image contains `iperf`, `curl`, `dns-tools` (including `dig`), CoreDNS, for both Windows and Linux.
+
+For Windows, the image is based on `busybox`, meaning that most of the Linux common tools are also
+available on it, making it possible to run most Linux commands in the `agnhost` Windows container
+as well. Keep in mind that there might still be some differences though (e.g.: `wget` does not
+have the `-T` argument on Windows).
+
+The Windows `agnhost` image includes a `nc` binary that is 100% compliant with its Linux equivalent.
+
+
 ## Image
 
-The image can be found at `gcr.io/kubernetes-e2e-test-images/agnhost:2.1` for Linux
-containers, and `e2eteam/agnhost:2.1` for Windows containers. In the future, the same
-repository can be used for both OSes.
+The image can be found at `us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.11` for both Linux and
+Windows containers (based on `mcr.microsoft.com/windows/servercore:ltsc2019`,
+`mcr.microsoft.com/windows/servercore:1903`, and `mcr.microsoft.com/windows/servercore:1909`).

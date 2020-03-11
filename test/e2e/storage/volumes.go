@@ -19,12 +19,13 @@ limitations under the License.
 package storage
 
 import (
+	"context"
+
 	"github.com/onsi/ginkgo"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 	"k8s.io/kubernetes/test/e2e/framework/volume"
 	"k8s.io/kubernetes/test/e2e/storage/utils"
 )
@@ -49,8 +50,6 @@ var _ = utils.SIGDescribe("Volumes", func() {
 				Namespace: namespace.Name,
 				Prefix:    "configmap",
 			}
-
-			defer volume.TestCleanup(f, config)
 			configMap := &v1.ConfigMap{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "ConfigMap",
@@ -65,11 +64,11 @@ var _ = utils.SIGDescribe("Volumes", func() {
 					"third":  "this is the third file",
 				},
 			}
-			if _, err := cs.CoreV1().ConfigMaps(namespace.Name).Create(configMap); err != nil {
-				e2elog.Failf("unable to create test configmap: %v", err)
+			if _, err := cs.CoreV1().ConfigMaps(namespace.Name).Create(context.TODO(), configMap, metav1.CreateOptions{}); err != nil {
+				framework.Failf("unable to create test configmap: %v", err)
 			}
 			defer func() {
-				_ = cs.CoreV1().ConfigMaps(namespace.Name).Delete(configMap.Name, nil)
+				_ = cs.CoreV1().ConfigMaps(namespace.Name).Delete(context.TODO(), configMap.Name, metav1.DeleteOptions{})
 			}()
 
 			// Test one ConfigMap mounted several times to test #28502
@@ -109,7 +108,7 @@ var _ = utils.SIGDescribe("Volumes", func() {
 					ExpectedContent: "this is the second file",
 				},
 			}
-			volume.TestVolumeClient(cs, config, nil, "" /* fsType */, tests)
+			volume.TestVolumeClient(f, config, nil, "" /* fsType */, tests)
 		})
 	})
 })

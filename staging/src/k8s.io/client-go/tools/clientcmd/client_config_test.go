@@ -148,12 +148,72 @@ func TestInsecureOverridesCA(t *testing.T) {
 
 	actualCfg, err := clientBuilder.ClientConfig()
 	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
+		t.Fatalf("Unexpected error: %v", err)
 	}
 
 	matchBoolArg(true, actualCfg.Insecure, t)
 	matchStringArg("", actualCfg.TLSClientConfig.CAFile, t)
 	matchByteArg(nil, actualCfg.TLSClientConfig.CAData, t)
+}
+
+func TestCAOverridesCAData(t *testing.T) {
+	file, err := ioutil.TempFile("", "my.ca")
+	if err != nil {
+		t.Fatalf("could not create tempfile: %v", err)
+	}
+	defer os.Remove(file.Name())
+
+	config := createCAValidTestConfig()
+	clientBuilder := NewNonInteractiveClientConfig(*config, "clean", &ConfigOverrides{
+		ClusterInfo: clientcmdapi.Cluster{
+			CertificateAuthority: file.Name(),
+		},
+	}, nil)
+
+	actualCfg, err := clientBuilder.ClientConfig()
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	matchBoolArg(false, actualCfg.Insecure, t)
+	matchStringArg(file.Name(), actualCfg.TLSClientConfig.CAFile, t)
+	matchByteArg(nil, actualCfg.TLSClientConfig.CAData, t)
+}
+
+func TestTLSServerName(t *testing.T) {
+	config := createValidTestConfig()
+
+	clientBuilder := NewNonInteractiveClientConfig(*config, "clean", &ConfigOverrides{
+		ClusterInfo: clientcmdapi.Cluster{
+			TLSServerName: "overridden-server-name",
+		},
+	}, nil)
+
+	actualCfg, err := clientBuilder.ClientConfig()
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	matchStringArg("overridden-server-name", actualCfg.ServerName, t)
+	matchStringArg("", actualCfg.TLSClientConfig.CAFile, t)
+	matchByteArg(nil, actualCfg.TLSClientConfig.CAData, t)
+}
+
+func TestTLSServerNameClearsWhenServerNameSet(t *testing.T) {
+	config := createValidTestConfig()
+
+	clientBuilder := NewNonInteractiveClientConfig(*config, "clean", &ConfigOverrides{
+		ClusterInfo: clientcmdapi.Cluster{
+			Server: "http://something",
+		},
+	}, nil)
+
+	actualCfg, err := clientBuilder.ClientConfig()
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	matchStringArg("", actualCfg.ServerName, t)
 }
 
 func TestMergeContext(t *testing.T) {
@@ -272,7 +332,7 @@ func TestCertificateData(t *testing.T) {
 
 func TestBasicAuthData(t *testing.T) {
 	username := "myuser"
-	password := "mypass"
+	password := "mypass" // Fake value for testing.
 
 	config := clientcmdapi.NewConfig()
 	config.Clusters["clean"] = &clientcmdapi.Cluster{
@@ -387,6 +447,7 @@ func TestCreateClean(t *testing.T) {
 	matchStringArg("", clientConfig.APIPath, t)
 	matchBoolArg(config.Clusters["clean"].InsecureSkipTLSVerify, clientConfig.Insecure, t)
 	matchStringArg(config.AuthInfos["clean"].Token, clientConfig.BearerToken, t)
+	matchStringArg(config.Clusters["clean"].TLSServerName, clientConfig.ServerName, t)
 }
 
 func TestCreateCleanWithPrefix(t *testing.T) {
@@ -437,6 +498,7 @@ func TestCreateCleanDefault(t *testing.T) {
 	}
 
 	matchStringArg(config.Clusters["clean"].Server, clientConfig.Host, t)
+	matchStringArg(config.Clusters["clean"].TLSServerName, clientConfig.ServerName, t)
 	matchBoolArg(config.Clusters["clean"].InsecureSkipTLSVerify, clientConfig.Insecure, t)
 	matchStringArg(config.AuthInfos["clean"].Token, clientConfig.BearerToken, t)
 }
@@ -453,12 +515,12 @@ func TestCreateCleanDefaultCluster(t *testing.T) {
 	}
 
 	matchStringArg(config.Clusters["clean"].Server, clientConfig.Host, t)
+	matchStringArg(config.Clusters["clean"].TLSServerName, clientConfig.ServerName, t)
 	matchBoolArg(config.Clusters["clean"].InsecureSkipTLSVerify, clientConfig.Insecure, t)
 	matchStringArg(config.AuthInfos["clean"].Token, clientConfig.BearerToken, t)
 }
 
 func TestCreateMissingContextNoDefault(t *testing.T) {
-	const expectedErrorContains = "Context was not found for specified context"
 	config := createValidTestConfig()
 	clientBuilder := NewNonInteractiveClientConfig(*config, "not-present", &ConfigOverrides{}, nil)
 

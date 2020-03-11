@@ -17,6 +17,7 @@ limitations under the License.
 package common
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -25,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 
@@ -159,7 +159,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 		    Description: Make sure a container's subpath can be set using an
 			expansion of environment variables.
 	*/
-	ginkgo.It("should allow substituting values in a volume subpath [sig-storage][NodeFeature:VolumeSubpathEnvExpansion]", func() {
+	ginkgo.It("should allow substituting values in a volume subpath [sig-storage]", func() {
 		podName := "var-expansion-" + string(uuid.NewUUID())
 		pod := &v1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
@@ -185,7 +185,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 								SubPathExpr: "$(POD_NAME)",
 							},
 							{
-								Name:      "workdir2",
+								Name:      "workdir1",
 								MountPath: "/testcontainer",
 							},
 						},
@@ -196,13 +196,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 					{
 						Name: "workdir1",
 						VolumeSource: v1.VolumeSource{
-							HostPath: &v1.HostPathVolumeSource{Path: "/tmp"},
-						},
-					},
-					{
-						Name: "workdir2",
-						VolumeSource: v1.VolumeSource{
-							HostPath: &v1.HostPathVolumeSource{Path: "/tmp"},
+							EmptyDir: &v1.EmptyDirVolumeSource{},
 						},
 					},
 				},
@@ -219,7 +213,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 		    Description: Make sure a container's subpath can not be set using an
 			expansion of environment variables when backticks are supplied.
 	*/
-	ginkgo.It("should fail substituting values in a volume subpath with backticks [sig-storage][NodeFeature:VolumeSubpathEnvExpansion][Slow]", func() {
+	ginkgo.It("should fail substituting values in a volume subpath with backticks [sig-storage][Slow]", func() {
 
 		podName := "var-expansion-" + string(uuid.NewUUID())
 		pod := &v1.Pod{
@@ -268,7 +262,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 		    Description: Make sure a container's subpath can not be set using an
 			expansion of environment variables when absolute path is supplied.
 	*/
-	ginkgo.It("should fail substituting values in a volume subpath with absolute path [sig-storage][NodeFeature:VolumeSubpathEnvExpansion][Slow]", func() {
+	ginkgo.It("should fail substituting values in a volume subpath with absolute path [sig-storage][Slow]", func() {
 
 		podName := "var-expansion-" + string(uuid.NewUUID())
 		pod := &v1.Pod{
@@ -316,7 +310,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 	   Testname: var-expansion-subpath-ready-from-failed-state
 	   Description: Verify that a failing subpath expansion can be modified during the lifecycle of a container.
 	*/
-	ginkgo.It("should verify that a failing subpath expansion can be modified during the lifecycle of a container [sig-storage][NodeFeature:VolumeSubpathEnvExpansion][Slow]", func() {
+	ginkgo.It("should verify that a failing subpath expansion can be modified during the lifecycle of a container [sig-storage][Slow]", func() {
 
 		podName := "var-expansion-" + string(uuid.NewUUID())
 		containerName := "dapi-container"
@@ -354,7 +348,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 								SubPathExpr: "$(ANNOTATION)/$(POD_NAME)",
 							},
 							{
-								Name:      "workdir2",
+								Name:      "workdir1",
 								MountPath: "/volume_mount",
 							},
 						},
@@ -364,13 +358,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 					{
 						Name: "workdir1",
 						VolumeSource: v1.VolumeSource{
-							HostPath: &v1.HostPathVolumeSource{Path: "/tmp"},
-						},
-					},
-					{
-						Name: "workdir2",
-						VolumeSource: v1.VolumeSource{
-							HostPath: &v1.HostPathVolumeSource{Path: "/tmp"},
+							EmptyDir: &v1.EmptyDirVolumeSource{},
 						},
 					},
 				},
@@ -378,8 +366,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 		}
 
 		ginkgo.By("creating the pod with failed condition")
-		var podClient *framework.PodClient
-		podClient = f.PodClient()
+		var podClient *framework.PodClient = f.PodClient()
 		pod = podClient.Create(pod)
 
 		err := e2epod.WaitTimeoutForPodRunningInNamespace(f.ClientSet, pod.Name, pod.Namespace, framework.PodStartShortTimeout)
@@ -395,7 +382,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 		framework.ExpectNoError(err, "while waiting for pod to be running")
 
 		ginkgo.By("deleting the pod gracefully")
-		err = framework.DeletePodWithWait(f, f.ClientSet, pod)
+		err = e2epod.DeletePodWithWait(f.ClientSet, pod)
 		framework.ExpectNoError(err, "failed to delete pod")
 	})
 
@@ -407,7 +394,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 			3.	successful expansion of the subpathexpr isn't required for volume cleanup
 
 	*/
-	ginkgo.It("should succeed in writing subpaths in container [sig-storage][NodeFeature:VolumeSubpathEnvExpansion][Slow]", func() {
+	ginkgo.It("should succeed in writing subpaths in container [sig-storage][Slow]", func() {
 
 		podName := "var-expansion-" + string(uuid.NewUUID())
 		containerName := "dapi-container"
@@ -445,7 +432,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 								SubPathExpr: "$(ANNOTATION)/$(POD_NAME)",
 							},
 							{
-								Name:      "workdir2",
+								Name:      "workdir1",
 								MountPath: "/volume_mount",
 							},
 						},
@@ -456,13 +443,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 					{
 						Name: "workdir1",
 						VolumeSource: v1.VolumeSource{
-							HostPath: &v1.HostPathVolumeSource{Path: "/tmp"},
-						},
-					},
-					{
-						Name: "workdir2",
-						VolumeSource: v1.VolumeSource{
-							HostPath: &v1.HostPathVolumeSource{Path: "/tmp"},
+							EmptyDir: &v1.EmptyDirVolumeSource{},
 						},
 					},
 				},
@@ -470,8 +451,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 		}
 
 		ginkgo.By("creating the pod")
-		var podClient *framework.PodClient
-		podClient = f.PodClient()
+		var podClient *framework.PodClient = f.PodClient()
 		pod = podClient.Create(pod)
 
 		ginkgo.By("waiting for pod running")
@@ -482,14 +462,14 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 		cmd := "touch /volume_mount/mypath/foo/test.log"
 		_, _, err = f.ExecShellInPodWithFullOutput(pod.Name, cmd)
 		if err != nil {
-			e2elog.Failf("expected to be able to write to subpath")
+			framework.Failf("expected to be able to write to subpath")
 		}
 
 		ginkgo.By("test for file in mounted path")
 		cmd = "test -f /subpath_mount/test.log"
 		_, _, err = f.ExecShellInPodWithFullOutput(pod.Name, cmd)
 		if err != nil {
-			e2elog.Failf("expected to be able to verify file")
+			framework.Failf("expected to be able to verify file")
 		}
 
 		ginkgo.By("updating the annotation value")
@@ -502,7 +482,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 		framework.ExpectNoError(err, "while waiting for annotated pod to be running")
 
 		ginkgo.By("deleting the pod gracefully")
-		err = framework.DeletePodWithWait(f, f.ClientSet, pod)
+		err = e2epod.DeletePodWithWait(f.ClientSet, pod)
 		framework.ExpectNoError(err, "failed to delete pod")
 	})
 
@@ -516,7 +496,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 
 	*/
 
-	ginkgo.It("should not change the subpath mount on a container restart if the environment variable changes [sig-storage][NodeFeature:VolumeSubpathEnvExpansion][Slow]", func() {
+	ginkgo.It("should not change the subpath mount on a container restart if the environment variable changes [sig-storage][Slow]", func() {
 
 		suffix := string(uuid.NewUUID())
 		podName := fmt.Sprintf("var-expansion-%s", suffix)
@@ -539,7 +519,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 								MountPath: "/subpath_mount",
 							},
 							{
-								Name:      "workdir2",
+								Name:      "workdir1",
 								MountPath: "/volume_mount",
 							},
 						},
@@ -569,7 +549,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 								SubPathExpr: "$(POD_NAME)",
 							},
 							{
-								Name:      "workdir2",
+								Name:      "workdir1",
 								MountPath: "/volume_mount",
 							},
 						},
@@ -580,13 +560,7 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 					{
 						Name: "workdir1",
 						VolumeSource: v1.VolumeSource{
-							HostPath: &v1.HostPathVolumeSource{Path: "/tmp"},
-						},
-					},
-					{
-						Name: "workdir2",
-						VolumeSource: v1.VolumeSource{
-							HostPath: &v1.HostPathVolumeSource{Path: "/tmp"},
+							EmptyDir: &v1.EmptyDirVolumeSource{},
 						},
 					},
 				},
@@ -608,11 +582,10 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 
 		// Start pod
 		ginkgo.By(fmt.Sprintf("Creating pod %s", pod.Name))
-		var podClient *framework.PodClient
-		podClient = f.PodClient()
+		var podClient *framework.PodClient = f.PodClient()
 		pod = podClient.Create(pod)
 		defer func() {
-			framework.DeletePodWithWait(f, f.ClientSet, pod)
+			e2epod.DeletePodWithWait(f.ClientSet, pod)
 		}()
 		err := e2epod.WaitForPodRunningInNamespace(f.ClientSet, pod)
 		framework.ExpectNoError(err, "while waiting for pod to be running")
@@ -629,25 +602,23 @@ var _ = framework.KubeDescribe("Variable Expansion", func() {
 		cmd := "test -f /volume_mount/foo/test.log"
 		_, _, err = f.ExecShellInPodWithFullOutput(pod.Name, cmd)
 		if err != nil {
-			e2elog.Failf("expected to be able to verify old file exists")
+			framework.Failf("expected to be able to verify old file exists")
 		}
 
 		cmd = "test ! -f /volume_mount/newsubpath/test.log"
 		_, _, err = f.ExecShellInPodWithFullOutput(pod.Name, cmd)
 		if err != nil {
-			e2elog.Failf("expected to be able to verify new file does not exist")
+			framework.Failf("expected to be able to verify new file does not exist")
 		}
 	})
 })
 
 func testPodFailSubpath(f *framework.Framework, pod *v1.Pod) {
-
-	var podClient *framework.PodClient
-	podClient = f.PodClient()
+	var podClient *framework.PodClient = f.PodClient()
 	pod = podClient.Create(pod)
 
 	defer func() {
-		framework.DeletePodWithWait(f, f.ClientSet, pod)
+		e2epod.DeletePodWithWait(f.ClientSet, pod)
 	}()
 
 	err := e2epod.WaitTimeoutForPodRunningInNamespace(f.ClientSet, pod.Name, pod.Namespace, framework.PodStartShortTimeout)
@@ -660,23 +631,23 @@ func waitForPodContainerRestart(f *framework.Framework, pod *v1.Pod, volumeMount
 	ginkgo.By("Failing liveness probe")
 	stdout, stderr, err := f.ExecShellInPodWithFullOutput(pod.Name, fmt.Sprintf("rm %v", volumeMount))
 
-	e2elog.Logf("Pod exec output: %v / %v", stdout, stderr)
+	framework.Logf("Pod exec output: %v / %v", stdout, stderr)
 	framework.ExpectNoError(err, "while failing liveness probe")
 
 	// Check that container has restarted
 	ginkgo.By("Waiting for container to restart")
 	restarts := int32(0)
 	err = wait.PollImmediate(10*time.Second, 2*time.Minute, func() (bool, error) {
-		pod, err := f.ClientSet.CoreV1().Pods(f.Namespace.Name).Get(pod.Name, metav1.GetOptions{})
+		pod, err := f.ClientSet.CoreV1().Pods(f.Namespace.Name).Get(context.TODO(), pod.Name, metav1.GetOptions{})
 		if err != nil {
 			return false, err
 		}
 		for _, status := range pod.Status.ContainerStatuses {
 			if status.Name == pod.Spec.Containers[0].Name {
-				e2elog.Logf("Container %v, restarts: %v", status.Name, status.RestartCount)
+				framework.Logf("Container %v, restarts: %v", status.Name, status.RestartCount)
 				restarts = status.RestartCount
 				if restarts > 0 {
-					e2elog.Logf("Container has restart count: %v", restarts)
+					framework.Logf("Container has restart count: %v", restarts)
 					return true, nil
 				}
 			}
@@ -688,7 +659,7 @@ func waitForPodContainerRestart(f *framework.Framework, pod *v1.Pod, volumeMount
 	// Fix liveness probe
 	ginkgo.By("Rewriting the file")
 	stdout, _, err = f.ExecShellInPodWithFullOutput(pod.Name, fmt.Sprintf("echo test-after > %v", volumeMount))
-	e2elog.Logf("Pod exec output: %v", stdout)
+	framework.Logf("Pod exec output: %v", stdout)
 	framework.ExpectNoError(err, "while rewriting the probe file")
 
 	// Wait for container restarts to stabilize
@@ -696,7 +667,7 @@ func waitForPodContainerRestart(f *framework.Framework, pod *v1.Pod, volumeMount
 	stableCount := int(0)
 	stableThreshold := int(time.Minute / framework.Poll)
 	err = wait.PollImmediate(framework.Poll, 2*time.Minute, func() (bool, error) {
-		pod, err := f.ClientSet.CoreV1().Pods(f.Namespace.Name).Get(pod.Name, metav1.GetOptions{})
+		pod, err := f.ClientSet.CoreV1().Pods(f.Namespace.Name).Get(context.TODO(), pod.Name, metav1.GetOptions{})
 		if err != nil {
 			return false, err
 		}
@@ -705,13 +676,13 @@ func waitForPodContainerRestart(f *framework.Framework, pod *v1.Pod, volumeMount
 				if status.RestartCount == restarts {
 					stableCount++
 					if stableCount > stableThreshold {
-						e2elog.Logf("Container restart has stabilized")
+						framework.Logf("Container restart has stabilized")
 						return true, nil
 					}
 				} else {
 					restarts = status.RestartCount
 					stableCount = 0
-					e2elog.Logf("Container has restart count: %v", restarts)
+					framework.Logf("Container has restart count: %v", restarts)
 				}
 				break
 			}

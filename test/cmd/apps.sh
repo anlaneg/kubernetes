@@ -79,7 +79,8 @@ run_daemonset_history_tests() {
   kube::test::get_object_assert daemonset "{{range.items}}{{${container_len:?}}}{{end}}" "2"
   kube::test::wait_object_assert controllerrevisions "{{range.items}}{{${annotations_field:?}}}:{{end}}" ".*rollingupdate-daemonset-rv2.yaml --record.*"
   # Rollback to revision 1 with dry-run - should be no-op
-  kubectl rollout undo daemonset --dry-run=true "${kube_flags[@]:?}"
+  kubectl rollout undo daemonset --dry-run=client "${kube_flags[@]:?}"
+  kubectl rollout undo daemonset --dry-run=server "${kube_flags[@]:?}"
   kube::test::get_object_assert daemonset "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DAEMONSET_R2}:"
   kube::test::get_object_assert daemonset "{{range.items}}{{${image_field1:?}}}:{{end}}" "${IMAGE_DAEMONSET_R2_2}:"
   kube::test::get_object_assert daemonset "{{range.items}}{{${container_len:?}}}{{end}}" "2"
@@ -212,6 +213,10 @@ run_deployment_tests() {
   ### Test kubectl create deployment with image and command
   # Pre-Condition: No deployment exists.
   kube::test::get_object_assert deployment "{{range.items}}{{${id_field:?}}}:{{end}}" ''
+  # Dry-run command
+  kubectl create deployment nginx-with-command --dry-run=client --image=k8s.gcr.io/nginx:test-cmd -- /bin/sleep infinity
+  kubectl create deployment nginx-with-command --dry-run=server --image=k8s.gcr.io/nginx:test-cmd -- /bin/sleep infinity
+  kube::test::get_object_assert deployment "{{range.items}}{{${id_field:?}}}:{{end}}" ''
   # Command
   kubectl create deployment nginx-with-command --image=k8s.gcr.io/nginx:test-cmd -- /bin/sleep infinity
   # Post-Condition: Deployment "nginx" is created.
@@ -263,9 +268,15 @@ run_deployment_tests() {
   ### Auto scale deployment
   # Pre-condition: no deployment exists
   kube::test::get_object_assert deployment "{{range.items}}{{${id_field:?}}}:{{end}}" ''
+  # Pre-condition: no hpa exists
+  kube::test::get_object_assert 'hpa' "{{range.items}}{{ if eq $id_field \\\"nginx-deployment\\\" }}found{{end}}{{end}}:" ':'
   # Command
   kubectl create -f test/fixtures/doc-yaml/user-guide/deployment.yaml "${kube_flags[@]:?}"
   kube::test::get_object_assert deployment "{{range.items}}{{${id_field:?}}}:{{end}}" 'nginx-deployment:'
+  # Dry-run autoscale
+  kubectl-with-retry autoscale deployment nginx-deployment --dry-run=client "${kube_flags[@]:?}" --min=2 --max=3
+  kubectl-with-retry autoscale deployment nginx-deployment --dry-run=server "${kube_flags[@]:?}" --min=2 --max=3
+  kube::test::get_object_assert 'hpa' "{{range.items}}{{ if eq $id_field \\\"nginx-deployment\\\" }}found{{end}}{{end}}:" ':'
   # autoscale 2~3 pods, no CPU utilization specified
   kubectl-with-retry autoscale deployment nginx-deployment "${kube_flags[@]:?}" --min=2 --max=3
   kube::test::get_object_assert 'hpa nginx-deployment' "{{${hpa_min_field:?}}} {{${hpa_max_field:?}}} {{${hpa_cpu_field:?}}}" '2 3 80'
@@ -289,14 +300,15 @@ run_deployment_tests() {
   kubectl apply -f hack/testdata/deployment-revision2.yaml "${kube_flags[@]:?}"
   kube::test::get_object_assert deployment.apps "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R2}:"
   # Rollback to revision 1 with dry-run - should be no-op
-  kubectl rollout undo deployment nginx --dry-run=true "${kube_flags[@]:?}" | grep "test-cmd"
+  kubectl rollout undo deployment nginx --dry-run=client "${kube_flags[@]:?}" | grep "test-cmd"
+  kubectl rollout undo deployment nginx --dry-run=server "${kube_flags[@]:?}"
   kube::test::get_object_assert deployment.apps "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R2}:"
   # Rollback to revision 1
   kubectl rollout undo deployment nginx --to-revision=1 "${kube_flags[@]:?}"
   sleep 1
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R1}:"
   # Rollback to revision 1000000 - should be no-op
-  ! kubectl rollout undo deployment nginx --to-revision=1000000 "${kube_flags[@]:?}"
+  ! kubectl rollout undo deployment nginx --to-revision=1000000 "${kube_flags[@]:?}" || exit 1
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R1}:"
   # Rollback to last revision
   kubectl rollout undo deployment nginx "${kube_flags[@]:?}"
@@ -305,9 +317,9 @@ run_deployment_tests() {
   # Pause the deployment
   kubectl-with-retry rollout pause deployment nginx "${kube_flags[@]:?}"
   # A paused deployment cannot be rolled back
-  ! kubectl rollout undo deployment nginx "${kube_flags[@]:?}"
+  ! kubectl rollout undo deployment nginx "${kube_flags[@]:?}" || exit 1
   # A paused deployment cannot be restarted
-  ! kubectl rollout restart deployment nginx "${kube_flags[@]:?}"
+  ! kubectl rollout restart deployment nginx "${kube_flags[@]:?}" || exit 1
   # Resume the deployment
   kubectl-with-retry rollout resume deployment nginx "${kube_flags[@]:?}"
   # The resumed deployment can now be rolled back
@@ -316,7 +328,7 @@ run_deployment_tests() {
   newrs="$(kubectl describe deployment nginx | grep NewReplicaSet | awk '{print $2}')"
   kubectl get rs "${newrs}" -o yaml | grep "deployment.kubernetes.io/revision-history: 1,3"
   # Check that trying to watch the status of a superseded revision returns an error
-  ! kubectl rollout status deployment/nginx --revision=3
+  ! kubectl rollout status deployment/nginx --revision=3 || exit 1
   # Restarting the deployment creates a new replicaset
   kubectl rollout restart deployment/nginx
   sleep 1
@@ -337,12 +349,17 @@ run_deployment_tests() {
   kube::test::get_object_assert deployment "{{range.items}}{{${id_field:?}}}:{{end}}" 'nginx-deployment:'
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R1}:"
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field1:?}}}:{{end}}" "${IMAGE_PERL}:"
+  # Dry-run set the deployment's image
+  kubectl set image deployment nginx-deployment nginx="${IMAGE_DEPLOYMENT_R2}" --dry-run=client "${kube_flags[@]:?}"
+  kubectl set image deployment nginx-deployment nginx="${IMAGE_DEPLOYMENT_R2}" --dry-run=server "${kube_flags[@]:?}"
+  kube::test::get_object_assert deployment "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R1}:"
+  kube::test::get_object_assert deployment "{{range.items}}{{${image_field1:?}}}:{{end}}" "${IMAGE_PERL}:"
   # Set the deployment's image
   kubectl set image deployment nginx-deployment nginx="${IMAGE_DEPLOYMENT_R2}" "${kube_flags[@]:?}"
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R2}:"
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field1:?}}}:{{end}}" "${IMAGE_PERL}:"
   # Set non-existing container should fail
-  ! kubectl set image deployment nginx-deployment redis=redis "${kube_flags[@]:?}"
+  ! kubectl set image deployment nginx-deployment redis=redis "${kube_flags[@]:?}" || exit 1
   # Set image of deployments without specifying name
   kubectl set image deployments --all nginx="${IMAGE_DEPLOYMENT_R1}" "${kube_flags[@]:?}"
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R1}:"
@@ -359,7 +376,7 @@ run_deployment_tests() {
   kubectl set image deployment nginx-deployment "*=${IMAGE_DEPLOYMENT_R1}" "${kube_flags[@]:?}"
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R1}:"
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field1:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R1}:"
-  # Set image of all containners of the deployment again when image not change
+  # Set image of all containers of the deployment again when image not change
   kubectl set image deployment nginx-deployment "*=${IMAGE_DEPLOYMENT_R1}" "${kube_flags[@]:?}"
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R1}:"
   kube::test::get_object_assert deployment "{{range.items}}{{${image_field1:?}}}:{{end}}" "${IMAGE_DEPLOYMENT_R1}:"
@@ -382,6 +399,10 @@ run_deployment_tests() {
   # Assert correct value in deployment env
   kube::test::get_object_assert 'deploy nginx-deployment' "{{ (index (index .spec.template.spec.containers 0).env 0).name}}" 'KEY_2'
   # Assert single value in deployment env
+  kube::test::get_object_assert 'deploy nginx-deployment' "{{ len (index .spec.template.spec.containers 0).env }}" '1'
+  # Dry-run set env
+  kubectl set env deployment nginx-deployment --dry-run=client --from=configmap/test-set-env-config "${kube_flags[@]:?}"
+  kubectl set env deployment nginx-deployment --dry-run=server --from=configmap/test-set-env-config "${kube_flags[@]:?}"
   kube::test::get_object_assert 'deploy nginx-deployment' "{{ len (index .spec.template.spec.containers 0).env }}" '1'
   # Set env of deployments by configmap
   kubectl set env deployment nginx-deployment --from=configmap/test-set-env-config "${kube_flags[@]:?}"
@@ -431,7 +452,8 @@ run_statefulset_history_tests() {
   kube::test::get_object_assert statefulset "{{range.items}}{{${container_len:?}}}{{end}}" "2"
   kube::test::wait_object_assert controllerrevisions "{{range.items}}{{${annotations_field:?}}}:{{end}}" ".*rollingupdate-statefulset-rv2.yaml --record.*"
   # Rollback to revision 1 with dry-run - should be no-op
-  kubectl rollout undo statefulset --dry-run=true "${kube_flags[@]:?}"
+  kubectl rollout undo statefulset --dry-run=client "${kube_flags[@]:?}"
+  kubectl rollout undo statefulset --dry-run=server "${kube_flags[@]:?}"
   kube::test::get_object_assert statefulset "{{range.items}}{{${image_field0:?}}}:{{end}}" "${IMAGE_STATEFULSET_R2}:"
   kube::test::get_object_assert statefulset "{{range.items}}{{${image_field1:?}}}:{{end}}" "${IMAGE_PAUSE_V2}:"
   kube::test::get_object_assert statefulset "{{range.items}}{{${container_len:?}}}{{end}}" "2"
@@ -520,13 +542,11 @@ run_rs_tests() {
   # Pre-condition: no replica set exists
   kube::test::get_object_assert rs "{{range.items}}{{${id_field:?}}}:{{end}}" ''
   # Command
-  #TODO(mortent): Remove this workaround when ReplicaSet bug described in issue #69376 is fixed
-  local replicaset_name="frontend-no-cascade"
-  sed -r 's/^(\s*)(name\s*:\s*frontend\s*$)/\1name: '"${replicaset_name:?}"'/' hack/testdata/frontend-replicaset.yaml | kubectl create "${kube_flags[@]:?}" -f -
+  kubectl create -f hack/testdata/frontend-replicaset.yaml "${kube_flags[@]}"
   # wait for all 3 pods to be set up
   kube::test::wait_object_assert 'pods -l "tier=frontend"' "{{range.items}}{{${pod_container_name_field:?}}}:{{end}}" 'php-redis:php-redis:php-redis:'
   kube::log::status "Deleting rs"
-  kubectl delete rs "${replicaset_name}" "${kube_flags[@]:?}" --cascade=false
+  kubectl delete rs frontend "${kube_flags[@]:?}" --cascade=false
   # Wait for the rs to be deleted.
   kube::test::wait_object_assert rs "{{range.items}}{{${id_field:?}}}:{{end}}" ''
   # Post-condition: All 3 pods still remain from frontend replica set
@@ -612,8 +632,16 @@ run_rs_tests() {
   kube::test::get_object_assert 'rs frontend' "{{${generation_field:?}}}" '2'
   kubectl set env rs/frontend "${kube_flags[@]:?}" foo=bar
   kube::test::get_object_assert 'rs frontend' "{{${generation_field:?}}}" '3'
+  kubectl set resources rs/frontend --dry-run=client "${kube_flags[@]:?}" --limits=cpu=200m,memory=512Mi
+  kubectl set resources rs/frontend --dry-run=server "${kube_flags[@]:?}" --limits=cpu=200m,memory=512Mi
+  kube::test::get_object_assert 'rs frontend' "{{${generation_field:?}}}" '3'
   kubectl set resources rs/frontend "${kube_flags[@]:?}" --limits=cpu=200m,memory=512Mi
   kube::test::get_object_assert 'rs frontend' "{{${generation_field:?}}}" '4'
+  kubectl set serviceaccount rs/frontend --dry-run=client "${kube_flags[@]:?}" serviceaccount1
+  kubectl set serviceaccount rs/frontend --dry-run=server "${kube_flags[@]:?}" serviceaccount1
+  kube::test::get_object_assert 'rs frontend' "{{${generation_field:?}}}" '4'
+  kubectl set serviceaccount rs/frontend "${kube_flags[@]:?}" serviceaccount1
+  kube::test::get_object_assert 'rs frontend' "{{${generation_field:?}}}" '5'
 
   ### Delete replica set with id
   # Pre-condition: frontend replica set exists
@@ -640,7 +668,7 @@ run_rs_tests() {
   # Post-condition: no replica set exists
   kube::test::get_object_assert rs "{{range.items}}{{${id_field:?}}}:{{end}}" ''
 
-  if kube::test::if_supports_resource "${horizontalpodautoscalers:?}" ; then
+  if kube::test::if_supports_resource "horizontalpodautoscalers" ; then
     ### Auto scale replica set
     # Pre-condition: no replica set exists
     kube::test::get_object_assert rs "{{range.items}}{{${id_field:?}}}:{{end}}" ''
@@ -656,7 +684,7 @@ run_rs_tests() {
     kube::test::get_object_assert 'hpa frontend' "{{${hpa_min_field:?}}} {{${hpa_max_field:?}}} {{${hpa_cpu_field:?}}}" '2 3 80'
     kubectl delete hpa frontend "${kube_flags[@]:?}"
     # autoscale without specifying --max should fail
-    ! kubectl autoscale rs frontend "${kube_flags[@]:?}"
+    ! kubectl autoscale rs frontend "${kube_flags[@]:?}" || exit 1
     # Clean up
     kubectl delete rs frontend "${kube_flags[@]:?}"
   fi

@@ -17,6 +17,7 @@ limitations under the License.
 package network
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -28,8 +29,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
+	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	e2essh "k8s.io/kubernetes/test/e2e/framework/ssh"
 	"k8s.io/kubernetes/test/images/agnhost/net/nat"
 	imageutils "k8s.io/kubernetes/test/utils/image"
@@ -51,14 +53,15 @@ var _ = SIGDescribe("Network", func() {
 	fr := framework.NewDefaultFramework("network")
 
 	ginkgo.It("should set TCP CLOSE_WAIT timeout", func() {
-		nodes := framework.GetReadySchedulableNodesOrDie(fr.ClientSet)
-		ips := e2enode.CollectAddresses(nodes, v1.NodeInternalIP)
-
+		nodes, err := e2enode.GetBoundedReadySchedulableNodes(fr.ClientSet, 2)
+		framework.ExpectNoError(err)
 		if len(nodes.Items) < 2 {
-			framework.Skipf(
+			e2eskipper.Skipf(
 				"Test requires >= 2 Ready nodes, but there are only %v nodes",
 				len(nodes.Items))
 		}
+
+		ips := e2enode.CollectAddresses(nodes, v1.NodeInternalIP)
 
 		type NodeInfo struct {
 			node   *v1.Node
@@ -81,12 +84,12 @@ var _ = SIGDescribe("Network", func() {
 		zero := int64(0)
 
 		// Some distributions (Ubuntu 16.04 etc.) don't support the proc file.
-		_, err := e2essh.IssueSSHCommandWithResult(
+		_, err = e2essh.IssueSSHCommandWithResult(
 			"ls /proc/net/nf_conntrack",
 			framework.TestContext.Provider,
 			clientNodeInfo.node)
 		if err != nil && strings.Contains(err.Error(), "No such file or directory") {
-			framework.Skipf("The node %s does not support /proc/net/nf_conntrack", clientNodeInfo.name)
+			e2eskipper.Skipf("The node %s does not support /proc/net/nf_conntrack", clientNodeInfo.name)
 		}
 		framework.ExpectNoError(err)
 
@@ -171,6 +174,8 @@ var _ = SIGDescribe("Network", func() {
 		}
 
 		jsonBytes, err := json.Marshal(options)
+		framework.ExpectNoError(err, "could not marshal")
+
 		cmd := fmt.Sprintf(
 			`curl -X POST http://localhost:%v/run/nat-closewait-client -d `+
 				`'%v' 2>/dev/null`,
@@ -212,7 +217,7 @@ var _ = SIGDescribe("Network", func() {
 		const epsilonSeconds = 60
 		const expectedTimeoutSeconds = 60 * 60
 
-		e2elog.Logf("conntrack entry timeout was: %v, expected: %v",
+		framework.Logf("conntrack entry timeout was: %v, expected: %v",
 			timeoutSeconds, expectedTimeoutSeconds)
 
 		gomega.Expect(math.Abs(float64(timeoutSeconds - expectedTimeoutSeconds))).Should(
@@ -241,7 +246,7 @@ var _ = SIGDescribe("Network", func() {
 				Containers: []v1.Container{
 					{
 						Name:  "boom-server",
-						Image: "gcr.io/kubernetes-e2e-test-images/regression-issue-74839-amd64:1.0",
+						Image: imageutils.GetE2EImage(imageutils.RegressionIssue74839),
 						Ports: []v1.ContainerPort{
 							{
 								ContainerPort: 9000, // Default port exposed by boom-server
@@ -263,7 +268,10 @@ var _ = SIGDescribe("Network", func() {
 				},
 			},
 		}
-		_, err := fr.ClientSet.CoreV1().Pods(fr.Namespace.Name).Create(serverPod)
+		_, err := fr.ClientSet.CoreV1().Pods(fr.Namespace.Name).Create(context.TODO(), serverPod, metav1.CreateOptions{})
+		framework.ExpectNoError(err)
+
+		err = e2epod.WaitForPodsRunningReady(fr.ClientSet, fr.Namespace.Name, 1, 0, framework.PodReadyBeforeTimeout, map[string]string{})
 		framework.ExpectNoError(err)
 
 		ginkgo.By("Server pod created")
@@ -282,7 +290,7 @@ var _ = SIGDescribe("Network", func() {
 				},
 			},
 		}
-		_, err = fr.ClientSet.CoreV1().Services(fr.Namespace.Name).Create(svc)
+		_, err = fr.ClientSet.CoreV1().Services(fr.Namespace.Name).Create(context.TODO(), svc, metav1.CreateOptions{})
 		framework.ExpectNoError(err)
 
 		ginkgo.By("Server service created")
@@ -317,14 +325,14 @@ var _ = SIGDescribe("Network", func() {
 				RestartPolicy: v1.RestartPolicyNever,
 			},
 		}
-		_, err = fr.ClientSet.CoreV1().Pods(fr.Namespace.Name).Create(pod)
+		_, err = fr.ClientSet.CoreV1().Pods(fr.Namespace.Name).Create(context.TODO(), pod, metav1.CreateOptions{})
 		framework.ExpectNoError(err)
 
 		ginkgo.By("Client pod created")
 
 		for i := 0; i < 20; i++ {
 			time.Sleep(3 * time.Second)
-			resultPod, err := fr.ClientSet.CoreV1().Pods(fr.Namespace.Name).Get(serverPod.Name, metav1.GetOptions{})
+			resultPod, err := fr.ClientSet.CoreV1().Pods(fr.Namespace.Name).Get(context.TODO(), serverPod.Name, metav1.GetOptions{})
 			framework.ExpectNoError(err)
 			gomega.Expect(resultPod.Status.ContainerStatuses[0].LastTerminationState.Terminated).Should(gomega.BeNil())
 		}

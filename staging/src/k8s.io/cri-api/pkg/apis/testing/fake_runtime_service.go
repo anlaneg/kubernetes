@@ -28,8 +28,8 @@ import (
 var (
 	FakeVersion = "0.1.0"
 
-	FakeRuntimeName  = "fakeRuntime"
-	FakePodSandboxIP = "192.168.192.168"
+	FakeRuntimeName   = "fakeRuntime"
+	FakePodSandboxIPs = []string{"192.168.192.168"}
 )
 
 type FakePodSandbox struct {
@@ -192,7 +192,15 @@ func (r *FakeRuntimeService) RunPodSandbox(config *runtimeapi.PodSandboxConfig, 
 			State:     runtimeapi.PodSandboxState_SANDBOX_READY,
 			CreatedAt: createdAt,
 			Network: &runtimeapi.PodSandboxNetworkStatus{
-				Ip: FakePodSandboxIP,
+				Ip: FakePodSandboxIPs[0],
+			},
+			// Without setting sandboxStatus's Linux.Namespaces.Options, kubeGenericRuntimeManager's podSandboxChanged will consider it as network
+			// namespace changed and always recreate sandbox which causes pod creation failed.
+			// Ref `sandboxStatus.GetLinux().GetNamespaces().GetOptions().GetNetwork() != networkNamespaceForPod(pod)` in podSandboxChanged function.
+			Linux: &runtimeapi.LinuxPodSandboxStatus{
+				Namespaces: &runtimeapi.Namespace{
+					Options: config.GetLinux().GetSecurityContext().GetNamespaceOptions(),
+				},
 			},
 			Labels:         config.Labels,
 			Annotations:    config.Annotations,
@@ -200,7 +208,15 @@ func (r *FakeRuntimeService) RunPodSandbox(config *runtimeapi.PodSandboxConfig, 
 		},
 		RuntimeHandler: runtimeHandler,
 	}
-
+	// assign additional IPs
+	additionalIPs := FakePodSandboxIPs[1:]
+	additionalPodIPs := make([]*runtimeapi.PodIP, 0, len(additionalIPs))
+	for _, ip := range additionalIPs {
+		additionalPodIPs = append(additionalPodIPs, &runtimeapi.PodIP{
+			Ip: ip,
+		})
+	}
+	r.Sandboxes[podSandboxID].PodSandboxStatus.Network.AdditionalIps = additionalPodIPs
 	return podSandboxID, nil
 }
 

@@ -17,6 +17,7 @@ limitations under the License.
 package auth
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -25,7 +26,7 @@ import (
 
 	auditregistrationv1alpha1 "k8s.io/api/auditregistration/v1alpha1"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -36,7 +37,6 @@ import (
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/kubernetes/test/e2e/framework"
 	"k8s.io/kubernetes/test/e2e/framework/auth"
-	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	"k8s.io/kubernetes/test/utils"
 	imageutils "k8s.io/kubernetes/test/utils/image"
@@ -59,14 +59,14 @@ var _ = SIGDescribe("[Feature:DynamicAudit]", func() {
 		anonymousClient, err := clientset.NewForConfig(config)
 		framework.ExpectNoError(err, "failed to create the anonymous client")
 
-		_, err = f.ClientSet.CoreV1().Namespaces().Create(&v1.Namespace{
+		_, err = f.ClientSet.CoreV1().Namespaces().Create(context.TODO(), &v1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "audit",
 			},
-		})
+		}, metav1.CreateOptions{})
 		framework.ExpectNoError(err, "failed to create namespace")
 
-		_, err = f.ClientSet.CoreV1().Pods(namespace).Create(&v1.Pod{
+		_, err = f.ClientSet.CoreV1().Pods(namespace).Create(context.TODO(), &v1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "audit-proxy",
 				Labels: map[string]string{
@@ -77,7 +77,8 @@ var _ = SIGDescribe("[Feature:DynamicAudit]", func() {
 				Containers: []v1.Container{
 					{
 						Name:  "proxy",
-						Image: imageutils.GetE2EImage(imageutils.AuditProxy),
+						Image: imageutils.GetE2EImage(imageutils.Agnhost),
+						Args:  []string{"audit-proxy"},
 						Ports: []v1.ContainerPort{
 							{
 								ContainerPort: 8080,
@@ -86,10 +87,10 @@ var _ = SIGDescribe("[Feature:DynamicAudit]", func() {
 					},
 				},
 			},
-		})
+		}, metav1.CreateOptions{})
 		framework.ExpectNoError(err, "failed to create proxy pod")
 
-		_, err = f.ClientSet.CoreV1().Services(namespace).Create(&v1.Service{
+		_, err = f.ClientSet.CoreV1().Services(namespace).Create(context.TODO(), &v1.Service{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "audit",
 			},
@@ -104,25 +105,22 @@ var _ = SIGDescribe("[Feature:DynamicAudit]", func() {
 					"app": "audit",
 				},
 			},
-		})
+		}, metav1.CreateOptions{})
 		framework.ExpectNoError(err, "failed to create proxy service")
-
-		config, err = framework.LoadConfig()
-		framework.ExpectNoError(err, "failed to load config")
 
 		var podIP string
 		// get pod ip
 		err = wait.Poll(100*time.Millisecond, 10*time.Second, func() (done bool, err error) {
-			p, err := f.ClientSet.CoreV1().Pods(namespace).Get("audit-proxy", metav1.GetOptions{})
-			if errors.IsNotFound(err) {
-				e2elog.Logf("waiting for audit-proxy pod to be present")
+			p, err := f.ClientSet.CoreV1().Pods(namespace).Get(context.TODO(), "audit-proxy", metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				framework.Logf("waiting for audit-proxy pod to be present")
 				return false, nil
 			} else if err != nil {
 				return false, err
 			}
 			podIP = p.Status.PodIP
 			if podIP == "" {
-				e2elog.Logf("waiting for audit-proxy pod IP to be ready")
+				framework.Logf("waiting for audit-proxy pod IP to be ready")
 				return false, nil
 			}
 			return true, nil
@@ -153,19 +151,19 @@ var _ = SIGDescribe("[Feature:DynamicAudit]", func() {
 			},
 		}
 
-		_, err = f.ClientSet.AuditregistrationV1alpha1().AuditSinks().Create(&sink)
+		_, err = f.ClientSet.AuditregistrationV1alpha1().AuditSinks().Create(context.TODO(), &sink, metav1.CreateOptions{})
 		framework.ExpectNoError(err, "failed to create audit sink")
-		e2elog.Logf("created audit sink")
+		framework.Logf("created audit sink")
 
 		// check that we are receiving logs in the proxy
 		err = wait.Poll(100*time.Millisecond, 10*time.Second, func() (done bool, err error) {
 			logs, err := e2epod.GetPodLogs(f.ClientSet, namespace, "audit-proxy", "proxy")
 			if err != nil {
-				e2elog.Logf("waiting for audit-proxy pod logs to be available")
+				framework.Logf("waiting for audit-proxy pod logs to be available")
 				return false, nil
 			}
 			if logs == "" {
-				e2elog.Logf("waiting for audit-proxy pod logs to be non-empty")
+				framework.Logf("waiting for audit-proxy pod logs to be non-empty")
 				return false, nil
 			}
 			return true, nil
@@ -197,23 +195,23 @@ var _ = SIGDescribe("[Feature:DynamicAudit]", func() {
 
 					f.PodClient().CreateSync(pod)
 
-					_, err := f.PodClient().Get(pod.Name, metav1.GetOptions{})
+					_, err := f.PodClient().Get(context.TODO(), pod.Name, metav1.GetOptions{})
 					framework.ExpectNoError(err, "failed to get audit-pod")
 
-					podChan, err := f.PodClient().Watch(watchOptions)
+					podChan, err := f.PodClient().Watch(context.TODO(), watchOptions)
 					framework.ExpectNoError(err, "failed to create watch for pods")
 					for range podChan.ResultChan() {
 					}
 
 					f.PodClient().Update(pod.Name, updatePod)
 
-					_, err = f.PodClient().List(metav1.ListOptions{})
+					_, err = f.PodClient().List(context.TODO(), metav1.ListOptions{})
 					framework.ExpectNoError(err, "failed to list pods")
 
-					_, err = f.PodClient().Patch(pod.Name, types.JSONPatchType, patch)
+					_, err = f.PodClient().Patch(context.TODO(), pod.Name, types.JSONPatchType, patch, metav1.PatchOptions{})
 					framework.ExpectNoError(err, "failed to patch pod")
 
-					f.PodClient().DeleteSync(pod.Name, &metav1.DeleteOptions{}, framework.DefaultPodDeletionTimeout)
+					f.PodClient().DeleteSync(pod.Name, metav1.DeleteOptions{}, framework.DefaultPodDeletionTimeout)
 				},
 				[]utils.AuditEvent{
 					{
@@ -326,7 +324,7 @@ var _ = SIGDescribe("[Feature:DynamicAudit]", func() {
 			// get a pod with unauthorized user
 			{
 				func() {
-					_, err := anonymousClient.CoreV1().Pods(namespace).Get("another-audit-pod", metav1.GetOptions{})
+					_, err := anonymousClient.CoreV1().Pods(namespace).Get(context.TODO(), "another-audit-pod", metav1.GetOptions{})
 					expectForbidden(err)
 				},
 				[]utils.AuditEvent{
@@ -371,14 +369,14 @@ var _ = SIGDescribe("[Feature:DynamicAudit]", func() {
 			reader := strings.NewReader(logs)
 			missingReport, err := utils.CheckAuditLines(reader, expectedEvents, auditv1.SchemeGroupVersion)
 			if err != nil {
-				e2elog.Logf("Failed to observe audit events: %v", err)
+				framework.Logf("Failed to observe audit events: %v", err)
 			} else if len(missingReport.MissingEvents) > 0 {
-				e2elog.Logf(missingReport.String())
+				framework.Logf(missingReport.String())
 			}
 			return len(missingReport.MissingEvents) == 0, nil
 		})
 		framework.ExpectNoError(err, "after %v failed to observe audit events", pollingTimeout)
-		err = f.ClientSet.AuditregistrationV1alpha1().AuditSinks().Delete("test", &metav1.DeleteOptions{})
+		err = f.ClientSet.AuditregistrationV1alpha1().AuditSinks().Delete(context.TODO(), "test", metav1.DeleteOptions{})
 		framework.ExpectNoError(err, "could not delete audit configuration")
 	})
 })

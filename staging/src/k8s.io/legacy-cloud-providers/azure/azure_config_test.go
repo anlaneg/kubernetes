@@ -1,3 +1,5 @@
+// +build !providerless
+
 /*
 Copyright 2019 The Kubernetes Authors.
 
@@ -17,16 +19,17 @@ limitations under the License.
 package azure
 
 import (
+	"context"
 	"testing"
+
+	"github.com/Azure/go-autorest/autorest/to"
+	"github.com/stretchr/testify/assert"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	fakeclient "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/legacy-cloud-providers/azure/auth"
 	"sigs.k8s.io/yaml"
-
-	"github.com/Azure/go-autorest/autorest/to"
-	"github.com/stretchr/testify/assert"
 )
 
 func getTestConfig() *Config {
@@ -151,7 +154,7 @@ func TestGetConfigFromSecret(t *testing.T) {
 						"cloud-config": secretData,
 					}
 				}
-				_, err := az.kubeClient.CoreV1().Secrets(cloudConfigNamespace).Create(secret)
+				_, err := az.kubeClient.CoreV1().Secrets(cloudConfigNamespace).Create(context.TODO(), secret, metav1.CreateOptions{})
 				assert.NoError(t, err, test.name)
 			}
 

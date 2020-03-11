@@ -17,10 +17,10 @@ limitations under the License.
 package fake
 
 import (
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/kubernetes/pkg/scheduler/algorithm"
 	internalcache "k8s.io/kubernetes/pkg/scheduler/internal/cache"
+	schedulerlisters "k8s.io/kubernetes/pkg/scheduler/listers"
 )
 
 // Cache is used for testing
@@ -74,8 +74,8 @@ func (c *Cache) UpdateNode(oldNode, newNode *v1.Node) error { return nil }
 // RemoveNode is a fake method for testing.
 func (c *Cache) RemoveNode(node *v1.Node) error { return nil }
 
-// UpdateNodeInfoSnapshot is a fake method for testing.
-func (c *Cache) UpdateNodeInfoSnapshot(nodeSnapshot *internalcache.NodeInfoSnapshot) error {
+// UpdateSnapshot is a fake method for testing.
+func (c *Cache) UpdateSnapshot(snapshot *internalcache.Snapshot) error {
 	return nil
 }
 
@@ -83,14 +83,21 @@ func (c *Cache) UpdateNodeInfoSnapshot(nodeSnapshot *internalcache.NodeInfoSnaps
 func (c *Cache) List(s labels.Selector) ([]*v1.Pod, error) { return nil, nil }
 
 // FilteredList is a fake method for testing.
-func (c *Cache) FilteredList(filter algorithm.PodFilter, selector labels.Selector) ([]*v1.Pod, error) {
+func (c *Cache) FilteredList(filter schedulerlisters.PodFilter, selector labels.Selector) ([]*v1.Pod, error) {
 	return nil, nil
 }
 
-// Snapshot is a fake method for testing
-func (c *Cache) Snapshot() *internalcache.Snapshot {
-	return &internalcache.Snapshot{}
+// Dump is a fake method for testing.
+func (c *Cache) Dump() *internalcache.Dump {
+	return &internalcache.Dump{}
 }
 
-// NodeTree is a fake method for testing.
-func (c *Cache) NodeTree() *internalcache.NodeTree { return nil }
+// GetNodeInfo is a fake method for testing.
+func (c *Cache) GetNodeInfo(nodeName string) (*v1.Node, error) {
+	return nil, nil
+}
+
+// ListNodes is a fake method for testing.
+func (c *Cache) ListNodes() []*v1.Node {
+	return nil
+}

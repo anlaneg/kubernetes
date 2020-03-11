@@ -39,6 +39,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,7 +51,7 @@ import (
 	"k8s.io/client-go/tools/pager"
 	"k8s.io/client-go/tools/record"
 	ref "k8s.io/client-go/tools/reference"
-	"k8s.io/kubernetes/pkg/util/metrics"
+	"k8s.io/component-base/metrics/prometheus/ratelimiter"
 )
 
 // Utilities for dealing with Jobs and CronJobs and time.
@@ -74,7 +75,7 @@ func NewController(kubeClient clientset.Interface) (*Controller, error) {
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: kubeClient.CoreV1().Events("")})
 
 	if kubeClient != nil && kubeClient.CoreV1().RESTClient().GetRateLimiter() != nil {
-		if err := metrics.RegisterMetricAndTrackRateLimiterUsage("cronjob_controller", kubeClient.CoreV1().RESTClient().GetRateLimiter()); err != nil {
+		if err := ratelimiter.RegisterMetricAndTrackRateLimiterUsage("cronjob_controller", kubeClient.CoreV1().RESTClient().GetRateLimiter()); err != nil {
 			return nil, err
 		}
 	}
@@ -107,7 +108,7 @@ func (jm *Controller) syncAll() {
 	// we must also see that the parent CronJob has non-nil DeletionTimestamp (see #42639).
 	// Note that this only works because we are NOT using any caches here.
 	jobListFunc := func(opts metav1.ListOptions) (runtime.Object, error) {
-		return jm.kubeClient.BatchV1().Jobs(metav1.NamespaceAll).List(opts)
+		return jm.kubeClient.BatchV1().Jobs(metav1.NamespaceAll).List(context.TODO(), opts)
 	}
 
 	js := make([]batchv1.Job, 0)
@@ -127,7 +128,7 @@ func (jm *Controller) syncAll() {
 
 	klog.V(4).Infof("Found %d jobs", len(js))
 	cronJobListFunc := func(opts metav1.ListOptions) (runtime.Object, error) {
-		return jm.kubeClient.BatchV1beta1().CronJobs(metav1.NamespaceAll).List(opts)
+		return jm.kubeClient.BatchV1beta1().CronJobs(metav1.NamespaceAll).List(context.TODO(), opts)
 	}
 
 	jobsBySj := groupJobsByParent(js)
@@ -157,12 +158,12 @@ func cleanupFinishedJobs(sj *batchv1beta1.CronJob, js []batchv1.Job, jc jobContr
 	}
 
 	failedJobs := []batchv1.Job{}
-	succesfulJobs := []batchv1.Job{}
+	successfulJobs := []batchv1.Job{}
 
 	for _, job := range js {
 		isFinished, finishedStatus := getFinishedStatus(&job)
 		if isFinished && finishedStatus == batchv1.JobComplete {
-			succesfulJobs = append(succesfulJobs, job)
+			successfulJobs = append(successfulJobs, job)
 		} else if isFinished && finishedStatus == batchv1.JobFailed {
 			failedJobs = append(failedJobs, job)
 		}
@@ -170,7 +171,7 @@ func cleanupFinishedJobs(sj *batchv1beta1.CronJob, js []batchv1.Job, jc jobContr
 
 	if sj.Spec.SuccessfulJobsHistoryLimit != nil {
 		removeOldestJobs(sj,
-			succesfulJobs,
+			successfulJobs,
 			jc,
 			*sj.Spec.SuccessfulJobsHistoryLimit,
 			recorder)
@@ -333,7 +334,11 @@ func syncOne(sj *batchv1beta1.CronJob, js []batchv1.Job, now time.Time, jc jobCo
 	}
 	jobResp, err := jc.CreateJob(sj.Namespace, jobReq)
 	if err != nil {
-		recorder.Eventf(sj, v1.EventTypeWarning, "FailedCreate", "Error creating job: %v", err)
+		// If the namespace is being torn down, we can safely ignore
+		// this error since all subsequent creations will fail.
+		if !errors.HasStatusCause(err, v1.NamespaceTerminatingCause) {
+			recorder.Eventf(sj, v1.EventTypeWarning, "FailedCreate", "Error creating job: %v", err)
+		}
 		return
 	}
 	klog.V(4).Infof("Created Job %s for %s", jobResp.Name, nameForLog)

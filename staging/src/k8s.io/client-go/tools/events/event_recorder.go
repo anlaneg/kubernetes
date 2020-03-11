@@ -51,7 +51,7 @@ func (recorder *recorderImpl) Eventf(regarding runtime.Object, related runtime.O
 	}
 	refRelated, err := reference.GetReference(recorder.scheme, related)
 	if err != nil {
-		klog.Errorf("Could not construct reference to: '%#v' due to: '%v'.", related, err)
+		klog.V(9).Infof("Could not construct reference to: '%#v' due to: '%v'.", related, err)
 	}
 	if !util.ValidateEventType(eventtype) {
 		klog.Errorf("Unsupported event type: '%v'", eventtype)
@@ -68,7 +68,7 @@ func (recorder *recorderImpl) makeEvent(refRegarding *v1.ObjectReference, refRel
 	t := metav1.Time{Time: recorder.clock.Now()}
 	namespace := refRegarding.Namespace
 	if namespace == "" {
-		namespace = metav1.NamespaceSystem
+		namespace = metav1.NamespaceDefault
 	}
 	return &v1beta1.Event{
 		ObjectMeta: metav1.ObjectMeta{

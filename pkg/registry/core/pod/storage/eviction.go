@@ -67,7 +67,7 @@ type EvictionREST struct {
 	podDisruptionBudgetClient policyclient.PodDisruptionBudgetsGetter
 }
 
-var _ = rest.Creater(&EvictionREST{})
+var _ = rest.NamedCreater(&EvictionREST{})
 var _ = rest.GroupVersionKindProvider(&EvictionREST{})
 
 // GroupVersionKind specifies a particular GroupVersionKind to discovery
@@ -101,8 +101,15 @@ func propagateDryRun(eviction *policy.Eviction, options *metav1.CreateOptions) (
 }
 
 // Create attempts to create a new eviction.  That is, it tries to evict a pod.
-func (r *EvictionREST) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
-	eviction := obj.(*policy.Eviction)
+func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
+	eviction, ok := obj.(*policy.Eviction)
+	if !ok {
+		return nil, errors.NewBadRequest(fmt.Sprintf("not a Eviction object: %T", obj))
+	}
+
+	if name != eviction.Name {
+		return nil, errors.NewBadRequest("name in URL does not match name in Eviction object")
+	}
 
 	deletionOptions, err := propagateDryRun(eviction, options)
 	if err != nil {
@@ -116,7 +123,7 @@ func (r *EvictionREST) Create(ctx context.Context, obj runtime.Object, createVal
 	pod := obj.(*api.Pod)
 
 	if createValidation != nil {
-		if err := createValidation(eviction.DeepCopyObject()); err != nil {
+		if err := createValidation(ctx, eviction.DeepCopyObject()); err != nil {
 			return nil, err
 		}
 	}
@@ -133,7 +140,7 @@ func (r *EvictionREST) Create(ctx context.Context, obj runtime.Object, createVal
 	}
 	var rtStatus *metav1.Status
 	var pdbName string
-	err = retry.RetryOnConflict(EvictionsRetry, func() error {
+	err = func() error {
 		pdbs, err := r.getPodDisruptionBudgets(ctx, pod)
 		if err != nil {
 			return err
@@ -146,19 +153,33 @@ func (r *EvictionREST) Create(ctx context.Context, obj runtime.Object, createVal
 				Code:    500,
 			}
 			return nil
-		} else if len(pdbs) == 1 {
-			pdb := pdbs[0]
-			pdbName = pdb.Name
+		}
+		if len(pdbs) == 0 {
+			return nil
+		}
+
+		pdb := &pdbs[0]
+		pdbName = pdb.Name
+		refresh := false
+		err = retry.RetryOnConflict(EvictionsRetry, func() error {
+			if refresh {
+				pdb, err = r.podDisruptionBudgetClient.PodDisruptionBudgets(pod.Namespace).Get(context.TODO(), pdbName, metav1.GetOptions{})
+				if err != nil {
+					return err
+				}
+			}
 			// Try to verify-and-decrement
 
 			// If it was false already, or if it becomes false during the course of our retries,
 			// raise an error marked as a 429.
-			if err := r.checkAndDecrement(pod.Namespace, pod.Name, pdb, dryrun.IsDryRun(deletionOptions.DryRun)); err != nil {
+			if err = r.checkAndDecrement(pod.Namespace, pod.Name, *pdb, dryrun.IsDryRun(deletionOptions.DryRun)); err != nil {
+				refresh = true
 				return err
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+		return err
+	}()
 	if err == wait.ErrWaitTimeout {
 		err = errors.NewTimeoutError(fmt.Sprintf("couldn't update PodDisruptionBudget %q due to conflicts", pdbName), 10)
 	}
@@ -193,26 +214,26 @@ func (r *EvictionREST) checkAndDecrement(namespace string, podName string, pdb p
 		err.ErrStatus.Details.Causes = append(err.ErrStatus.Details.Causes, metav1.StatusCause{Type: "DisruptionBudget", Message: fmt.Sprintf("The disruption budget %s is still being processed by the server.", pdb.Name)})
 		return err
 	}
-	if pdb.Status.PodDisruptionsAllowed < 0 {
+	if pdb.Status.DisruptionsAllowed < 0 {
 		return errors.NewForbidden(policy.Resource("poddisruptionbudget"), pdb.Name, fmt.Errorf("pdb disruptions allowed is negative"))
 	}
 	if len(pdb.Status.DisruptedPods) > MaxDisruptedPodSize {
 		return errors.NewForbidden(policy.Resource("poddisruptionbudget"), pdb.Name, fmt.Errorf("DisruptedPods map too big - too many evictions not confirmed by PDB controller"))
 	}
-	if pdb.Status.PodDisruptionsAllowed == 0 {
+	if pdb.Status.DisruptionsAllowed == 0 {
 		err := errors.NewTooManyRequests("Cannot evict pod as it would violate the pod's disruption budget.", 0)
 		err.ErrStatus.Details.Causes = append(err.ErrStatus.Details.Causes, metav1.StatusCause{Type: "DisruptionBudget", Message: fmt.Sprintf("The disruption budget %s needs %d healthy pods and has %d currently", pdb.Name, pdb.Status.DesiredHealthy, pdb.Status.CurrentHealthy)})
 		return err
 	}
 
-	pdb.Status.PodDisruptionsAllowed--
-	if pdb.Status.DisruptedPods == nil {
-		pdb.Status.DisruptedPods = make(map[string]metav1.Time)
-	}
-
+	pdb.Status.DisruptionsAllowed--
 	// If this is a dry-run, we don't need to go any further than that.
 	if dryRun == true {
 		return nil
+	}
+
+	if pdb.Status.DisruptedPods == nil {
+		pdb.Status.DisruptedPods = make(map[string]metav1.Time)
 	}
 
 	// Eviction handler needs to inform the PDB controller that it is about to delete a pod
@@ -220,7 +241,7 @@ func (r *EvictionREST) checkAndDecrement(namespace string, podName string, pdb p
 	// If the pod is not deleted within a reasonable time limit PDB controller will assume that it won't
 	// be deleted at all and remove it from DisruptedPod map.
 	pdb.Status.DisruptedPods[podName] = metav1.Time{Time: time.Now()}
-	if _, err := r.podDisruptionBudgetClient.PodDisruptionBudgets(namespace).UpdateStatus(&pdb); err != nil {
+	if _, err := r.podDisruptionBudgetClient.PodDisruptionBudgets(namespace).UpdateStatus(context.TODO(), &pdb, metav1.UpdateOptions{}); err != nil {
 		return err
 	}
 
@@ -233,7 +254,7 @@ func (r *EvictionREST) getPodDisruptionBudgets(ctx context.Context, pod *api.Pod
 		return nil, nil
 	}
 
-	pdbList, err := r.podDisruptionBudgetClient.PodDisruptionBudgets(pod.Namespace).List(metav1.ListOptions{})
+	pdbList, err := r.podDisruptionBudgetClient.PodDisruptionBudgets(pod.Namespace).List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
