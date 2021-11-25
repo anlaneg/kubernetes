@@ -122,6 +122,7 @@ type cniDNSConfig struct {
 }
 
 // SplitDirs : split dirs by ","
+// 通过','分隔dirs成数组
 func SplitDirs(dirs string) []string {
 	// Use comma rather than colon to work better with Windows too
 	return strings.Split(dirs, ",")
@@ -133,6 +134,7 @@ func ProbeNetworkPlugins(confDir, cacheDir string, binDirs []string) []network.N
 	binDirs = make([]string, 0, len(binDirs))
 	for _, dir := range old {
 		if dir != "" {
+			//将binDirs中非空的元素加到到binDirs中
 			binDirs = append(binDirs, dir)
 		}
 	}

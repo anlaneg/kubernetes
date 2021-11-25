@@ -75,12 +75,14 @@ const (
 
 // newKubeDockerClient creates an kubeDockerClient from an existing docker client. If requestTimeout is 0,
 // defaultTimeout will be applied.
+// 创建kubeDockerClient对象，并直接返回Interface类型
 func newKubeDockerClient(dockerClient *dockerapi.Client, requestTimeout, imagePullProgressDeadline time.Duration) Interface {
 	if requestTimeout == 0 {
 		requestTimeout = defaultTimeout
 	}
 
 	k := &kubeDockerClient{
+		//dockerapi使用的client
 		client:                    dockerClient,
 		timeout:                   requestTimeout,
 		imagePullProgressDeadline: imagePullProgressDeadline,
@@ -94,9 +96,11 @@ func newKubeDockerClient(dockerClient *dockerapi.Client, requestTimeout, imagePu
 	return k
 }
 
+//列出当前系统所有容器（等价于docker ps)
 func (d *kubeDockerClient) ListContainers(options dockertypes.ContainerListOptions) ([]dockertypes.Container, error) {
 	ctx, cancel := d.getTimeoutContext()
 	defer cancel()
+	//列出当前系统所有容器
 	containers, err := d.client.ContainerList(ctx, options)
 	if ctxErr := contextError(ctx); ctxErr != nil {
 		return nil, ctxErr
@@ -107,6 +111,7 @@ func (d *kubeDockerClient) ListContainers(options dockertypes.ContainerListOptio
 	return containers, nil
 }
 
+//返回容器的描述信息
 func (d *kubeDockerClient) InspectContainer(id string) (*dockertypes.ContainerJSON, error) {
 	ctx, cancel := d.getTimeoutContext()
 	defer cancel()
@@ -135,6 +140,7 @@ func (d *kubeDockerClient) InspectContainerWithSize(id string) (*dockertypes.Con
 	return &containerJSON, nil
 }
 
+//创建容器
 func (d *kubeDockerClient) CreateContainer(opts dockertypes.ContainerCreateConfig) (*dockercontainer.ContainerCreateCreatedBody, error) {
 	ctx, cancel := d.getTimeoutContext()
 	defer cancel()
@@ -153,9 +159,10 @@ func (d *kubeDockerClient) CreateContainer(opts dockertypes.ContainerCreateConfi
 	return &createResp, nil
 }
 
-func (d *kubeDockerClient) StartContainer(id string) error {
+func (d *kubeDockerClient) StartContainer(id string/*容器名称*/) error {
 	ctx, cancel := d.getTimeoutContext()
 	defer cancel()
+	/*通过dockerapi启动容器*/
 	err := d.client.ContainerStart(ctx, id, dockertypes.ContainerStartOptions{})
 	if ctxErr := contextError(ctx); ctxErr != nil {
 		return ctxErr
@@ -164,9 +171,10 @@ func (d *kubeDockerClient) StartContainer(id string) error {
 }
 
 // Stopping an already stopped container will not cause an error in dockerapi.
-func (d *kubeDockerClient) StopContainer(id string, timeout time.Duration) error {
+func (d *kubeDockerClient) StopContainer(id string/*容器名称*/, timeout time.Duration) error {
 	ctx, cancel := d.getCustomTimeoutContext(timeout)
 	defer cancel()
+	//停止指定容器
 	err := d.client.ContainerStop(ctx, id, &timeout)
 	if ctxErr := contextError(ctx); ctxErr != nil {
 		return ctxErr
@@ -174,6 +182,7 @@ func (d *kubeDockerClient) StopContainer(id string, timeout time.Duration) error
 	return err
 }
 
+//容器将被杀死并自docker host上移除
 func (d *kubeDockerClient) RemoveContainer(id string, opts dockertypes.ContainerRemoveOptions) error {
 	ctx, cancel := d.getTimeoutContext()
 	defer cancel()
@@ -184,7 +193,8 @@ func (d *kubeDockerClient) RemoveContainer(id string, opts dockertypes.Container
 	return err
 }
 
-func (d *kubeDockerClient) UpdateContainerResources(id string, updateConfig dockercontainer.UpdateConfig) error {
+//容器资源更新
+func (d *kubeDockerClient) UpdateContainerResources(id string/*容器名称*/, updateConfig dockercontainer.UpdateConfig) error {
 	ctx, cancel := d.getTimeoutContext()
 	defer cancel()
 	_, err := d.client.ContainerUpdate(ctx, id, updateConfig)
@@ -194,6 +204,7 @@ func (d *kubeDockerClient) UpdateContainerResources(id string, updateConfig dock
 	return err
 }
 
+//返回image信息及它的raw格式的表示
 func (d *kubeDockerClient) inspectImageRaw(ref string) (*dockertypes.ImageInspect, error) {
 	ctx, cancel := d.getTimeoutContext()
 	defer cancel()
@@ -245,6 +256,7 @@ func (d *kubeDockerClient) ImageHistory(id string) ([]dockerimagetypes.HistoryRe
 	return resp, err
 }
 
+//返回docker主机上所有images
 func (d *kubeDockerClient) ListImages(opts dockertypes.ImageListOptions) ([]dockertypes.ImageSummary, error) {
 	ctx, cancel := d.getTimeoutContext()
 	defer cancel()
@@ -354,7 +366,8 @@ func (p *progressReporter) stop() {
 	close(p.stopCh)
 }
 
-func (d *kubeDockerClient) PullImage(image string, auth dockertypes.AuthConfig, opts dockertypes.ImagePullOptions) error {
+/*拉取镜像*/
+func (d *kubeDockerClient) PullImage(image string/*镜像名称*/, auth dockertypes.AuthConfig, opts dockertypes.ImagePullOptions/*拉取选项*/) error {
 	// RegistryAuth is the base64 encoded credentials for the registry
 	base64Auth, err := base64EncodeAuth(auth)
 	if err != nil {
@@ -363,6 +376,7 @@ func (d *kubeDockerClient) PullImage(image string, auth dockertypes.AuthConfig, 
 	opts.RegistryAuth = base64Auth
 	ctx, cancel := d.getCancelableContext()
 	defer cancel()
+	//拉取镜像
 	resp, err := d.client.ImagePull(ctx, image, opts)
 	if err != nil {
 		return err

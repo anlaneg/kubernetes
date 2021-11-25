@@ -55,6 +55,7 @@ var (
 )
 
 // NewContainerManager creates a new instance of ContainerManager
+//创建container manager
 func NewContainerManager(cgroupsName string, client libdocker.Interface) ContainerManager {
 	return &containerManager{
 		cgroupsName: cgroupsName,
@@ -71,6 +72,7 @@ type containerManager struct {
 	cgroupsManager *fs.Manager
 }
 
+//定义容器的container manager启动函数
 func (m *containerManager) Start() error {
 	// TODO: check if the required cgroups are mounted.
 	if len(m.cgroupsName) != 0 {
@@ -80,10 +82,12 @@ func (m *containerManager) Start() error {
 		}
 		m.cgroupsManager = manager
 	}
+	//每隔5min调用一次m.doWork完成具体工作，直到wait.NeverStop
 	go wait.Until(m.doWork, 5*time.Minute, wait.NeverStop)
 	return nil
 }
 
+//负责容器检查
 func (m *containerManager) doWork() {
 	v, err := m.client.Version()
 	if err != nil {

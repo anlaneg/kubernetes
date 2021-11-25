@@ -114,7 +114,9 @@ const (
 func NewKubeletCommand() *cobra.Command {
 	cleanFlagSet := pflag.NewFlagSet(componentKubelet, pflag.ContinueOnError)
 	cleanFlagSet.SetNormalizeFunc(cliflag.WordSepNormalizeFunc)
+	//创建默认flags配置
 	kubeletFlags := options.NewKubeletFlags()
+	//解析配置文件，完成参数配置
 	kubeletConfig, err := options.NewKubeletConfiguration()
 	// programmer error
 	if err != nil {
@@ -150,6 +152,7 @@ HTTP server: The kubelet can also listen for HTTP and respond to a simple API
 		// DisableFlagParsing=true provides the full set of flags passed to the kubelet in the
 		// `args` arg to Run, without Cobra's interference.
 		DisableFlagParsing: true,
+		//命令行解析函数
 		Run: func(cmd *cobra.Command, args []string) {
 			// initial flag parse, since we disable cobra's flag parsing
 			if err := cleanFlagSet.Parse(args); err != nil {
@@ -170,6 +173,7 @@ HTTP server: The kubelet can also listen for HTTP and respond to a simple API
 				klog.Fatal(`"help" flag is non-bool, programmer error, please correct`)
 			}
 			if help {
+				//显示帮助信息后退出
 				cmd.Help()
 				return
 			}
@@ -194,6 +198,7 @@ HTTP server: The kubelet can also listen for HTTP and respond to a simple API
 
 			// load kubelet config file, if provided
 			if configFile := kubeletFlags.KubeletConfigFile; len(configFile) > 0 {
+				//加载配置文件
 				kubeletConfig, err = loadConfigFile(configFile)
 				if err != nil {
 					klog.Fatal(err)
@@ -262,6 +267,7 @@ HTTP server: The kubelet can also listen for HTTP and respond to a simple API
 
 			// start the experimental docker shim, if enabled
 			if kubeletServer.KubeletFlags.ExperimentalDockershim {
+				//运行docker shim
 				if err := RunDockershim(&kubeletServer.KubeletFlags, kubeletConfig, stopCh); err != nil {
 					klog.Fatal(err)
 				}
@@ -344,6 +350,7 @@ func kubeletConfigFlagPrecedence(kc *kubeletconfiginternal.KubeletConfiguration,
 	return nil
 }
 
+//加载指定路径的配置文件
 func loadConfigFile(name string) (*kubeletconfiginternal.KubeletConfiguration, error) {
 	const errFmt = "failed to load Kubelet config file %s, error %v"
 	// compute absolute path based on current working dir
@@ -415,6 +422,7 @@ func UnsecuredDependencies(s *options.KubeletServer, featureGate featuregate.Fea
 func Run(s *options.KubeletServer, kubeDeps *kubelet.Dependencies, featureGate featuregate.FeatureGate, stopCh <-chan struct{}) error {
 	// To help debugging, immediately log version
 	klog.Infof("Version: %+v", version.Get())
+	//通过对操作系统检查，做预先特殊处理，当前仅windows做特别处理
 	if err := initForOS(s.KubeletFlags.WindowsService); err != nil {
 		return fmt.Errorf("failed OS init: %v", err)
 	}

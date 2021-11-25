@@ -31,6 +31,8 @@ import (
 	"k8s.io/kubernetes/cmd/kubelet/app"
 )
 
+//kuberlet入口，其负责管控容器，Kubelet会从Kubernetes API Server
+//接收Pod的创建请求，启动和停止容器，监控容器运行状态并汇报给Kubernetes API Server。
 func main() {
 	rand.Seed(time.Now().UnixNano())
 

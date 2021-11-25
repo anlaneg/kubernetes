@@ -755,6 +755,8 @@ func buildContainerMapFromRuntime(runtimeService internalapi.RuntimeService) (co
 	return containerMap, nil
 }
 
+//取进程1的pid namespace,然后取给定进程的pid namespace,如果两者相同，则其运行在host主机
+//namespace中
 func isProcessRunningInHost(pid int) (bool, error) {
 	// Get init pid namespace.
 	initPidNs, err := os.Readlink("/proc/1/ns/pid")
@@ -790,17 +792,21 @@ func getPidFromPidFile(pidFile string) (int, error) {
 	return pid, nil
 }
 
+//取名称为name的所有进程pids
 func getPidsForProcess(name, pidFile string) ([]int, error) {
 	if len(pidFile) == 0 {
+		//pid文件不存在，采用pidof查询名称为name的进程
 		return procfs.PidOf(name)
 	}
 
+	//从pid文件中直接读取进程id
 	pid, err := getPidFromPidFile(pidFile)
 	if err == nil {
 		return []int{pid}, nil
 	}
 
 	// Try to lookup pid by process name
+	//取进程名为name的pids
 	pids, err2 := procfs.PidOf(name)
 	if err2 == nil {
 		return pids, nil
@@ -845,6 +851,7 @@ func ensureProcessInContainerWithOOMScore(pid int, oomScoreAdj int, manager *fs.
 		// Err on the side of caution. Avoid moving the docker daemon unless we are able to identify its context.
 		return err
 	} else if !runningInHost {
+		//进程pid在container中
 		// Process is running inside a container. Don't touch that.
 		klog.V(2).Infof("pid %d is not running in the host namespaces", pid)
 		return nil
@@ -879,6 +886,20 @@ func ensureProcessInContainerWithOOMScore(pid int, oomScoreAdj int, manager *fs.
 // It enforces a unified hierarchy for memory and cpu cgroups.
 // On systemd environments, it uses the name=systemd cgroup for the specified pid.
 func getContainer(pid int) (string, error) {
+	//读指定进程的cgroup
+	/**
+	 * 10:memory:/
+	 * 9:cpuset:/
+	 * 8:blkio:/
+	 * 7:perf_event:/
+	 * 6:devices:/
+	 * 5:pids:/
+	 * 4:cpu,cpuacct:/
+     * 3:freezer:/
+	 * 2:net_cls,net_prio:/
+	 * 1:name=systemd:/
+	 * 0::/
+	 */
 	cgs, err := cgroups.ParseCgroupFile(fmt.Sprintf("/proc/%d/cgroup", pid))
 	if err != nil {
 		return "", err

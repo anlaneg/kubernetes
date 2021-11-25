@@ -172,11 +172,12 @@ type ClientConfig struct {
 
 // NewDockerClientFromConfig create a docker client from given configure
 // return nil if nil configure is given.
+// 通过配置创建docker client interface
 func NewDockerClientFromConfig(config *ClientConfig) libdocker.Interface {
 	if config != nil {
 		// Create docker client.
 		client := libdocker.ConnectToDockerOrDie(
-			config.DockerEndpoint,
+			config.DockerEndpoint,//要连接的主机地址
 			config.RuntimeRequestTimeout,
 			config.ImagePullProgressDeadline,
 		)
@@ -188,9 +189,11 @@ func NewDockerClientFromConfig(config *ClientConfig) libdocker.Interface {
 
 // NewDockerService creates a new `DockerService` struct.
 // NOTE: Anything passed to DockerService should be eventually handled in another way when we switch to running the shim as a different process.
+// 创建docker service
 func NewDockerService(config *ClientConfig, podSandboxImage string, streamingConfig *streaming.Config, pluginSettings *NetworkPluginSettings,
 	cgroupsName string, kubeCgroupDriver string, dockershimRootDir string, startLocalStreamingServer bool) (DockerService, error) {
 
+	//创建docker client
 	client := NewDockerClientFromConfig(config)
 
 	c := libdocker.NewInstrumentedInterface(client)
@@ -200,14 +203,16 @@ func NewDockerService(config *ClientConfig, podSandboxImage string, streamingCon
 		return nil, err
 	}
 
+	//docker service对象创建
 	ds := &dockerService{
-		client:          c,
+		client:          c,//用于操作dockerapi的client
 		os:              kubecontainer.RealOS{},
 		podSandboxImage: podSandboxImage,
 		streamingRuntime: &streamingRuntime{
 			client:      client,
 			execHandler: &NativeExecHandler{},
 		},
+		//创建container manager
 		containerManager:          cm.NewContainerManager(cgroupsName, client),
 		checkpointManager:         checkpointManager,
 		startLocalStreamingServer: startLocalStreamingServer,
@@ -238,6 +243,7 @@ func NewDockerService(config *ClientConfig, podSandboxImage string, streamingCon
 	klog.Infof("Hairpin mode set to %q", pluginSettings.HairpinMode)
 
 	// dockershim currently only supports CNI plugins.
+	// 通过逗号分隔成pluginBinDirs数组
 	pluginSettings.PluginBinDirs = cni.SplitDirs(pluginSettings.PluginBinDirString)
 	cniPlugins := cni.ProbeNetworkPlugins(pluginSettings.PluginConfDir, pluginSettings.PluginCacheDir, pluginSettings.PluginBinDirs)
 	cniPlugins = append(cniPlugins, kubenet.NewPlugin(pluginSettings.PluginBinDirs, pluginSettings.PluginCacheDir))
@@ -245,10 +251,14 @@ func NewDockerService(config *ClientConfig, podSandboxImage string, streamingCon
 		&namespaceGetter{ds},
 		&portMappingGetter{ds},
 	}
-	plug, err := network.InitNetworkPlugin(cniPlugins, pluginSettings.PluginName, netHost, pluginSettings.HairpinMode, pluginSettings.NonMasqueradeCIDR, pluginSettings.MTU)
+	
+	//初始化网络pluginname
+	plug, err := network.InitNetworkPlugin(cniPlugins/*一组cni插件*/, pluginSettings.PluginName/*插件名称*/, netHost, pluginSettings.HairpinMode, pluginSettings.NonMasqueradeCIDR, pluginSettings.MTU)
 	if err != nil {
 		return nil, fmt.Errorf("didn't find compatible CNI plugin with given settings %+v: %v", pluginSettings, err)
 	}
+	
+	//初始化网络plugin manager
 	ds.network = network.NewPluginManager(plug)
 	klog.Infof("Docker cri networking managed by %v", plug.Name())
 
@@ -290,6 +300,7 @@ type dockerService struct {
 	streamingRuntime *streamingRuntime
 	streamingServer  streaming.Server
 
+	//网络插件manager
 	network *network.PluginManager
 	// Map of podSandboxID :: network-is-ready
 	networkReady     map[string]bool
@@ -413,6 +424,7 @@ func (ds *dockerService) Start() error {
 			}
 		}()
 	}
+	//通过container manager启动容器
 	return ds.containerManager.Start()
 }
 

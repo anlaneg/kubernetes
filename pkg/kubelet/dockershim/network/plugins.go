@@ -40,6 +40,7 @@ import (
 )
 
 const (
+	//默认插件名称
 	DefaultPluginName = "kubernetes.io/no-op"
 
 	// Called when the node's Pod CIDR is known when using the
@@ -49,6 +50,7 @@ const (
 )
 
 // NetworkPlugin is an interface to network plugins for the kubelet
+// 定义网络插件
 type NetworkPlugin interface {
 	// Init initializes the plugin.  This will be called exactly once
 	// before any other methods are called.
@@ -60,6 +62,7 @@ type NetworkPlugin interface {
 
 	// Name returns the plugin's name. This will be used when searching
 	// for a plugin by name, e.g.
+	// 返回plugin名称
 	Name() string
 
 	// Returns a set of NET_PLUGIN_CAPABILITY_*
@@ -129,8 +132,10 @@ type PortMappingGetter interface {
 }
 
 // InitNetworkPlugin inits the plugin that matches networkPluginName. Plugins must have unique names.
-func InitNetworkPlugin(plugins []NetworkPlugin, networkPluginName string, host Host, hairpinMode kubeletconfig.HairpinMode, nonMasqueradeCIDR string, mtu int) (NetworkPlugin, error) {
+// 注册一组网络plugin，并初始化指定名称的插件
+func InitNetworkPlugin(plugins []NetworkPlugin, networkPluginName string/*待初始化的插件名称*/, host Host, hairpinMode kubeletconfig.HairpinMode, nonMasqueradeCIDR string, mtu int) (NetworkPlugin, error) {
 	if networkPluginName == "" {
+		//网络插件为空时，使用noop网络插件
 		// default to the no_op plugin
 		plug := &NoopNetworkPlugin{}
 		plug.Sysctl = utilsysctl.New()
@@ -140,9 +145,11 @@ func InitNetworkPlugin(plugins []NetworkPlugin, networkPluginName string, host H
 		return plug, nil
 	}
 
+	//记录插件名称与插件的映射
 	pluginMap := map[string]NetworkPlugin{}
 
 	allErrs := []error{}
+	//遍历传入的每个plugin
 	for _, plugin := range plugins {
 		name := plugin.Name()
 		if errs := validation.IsQualifiedName(name); len(errs) != 0 {
@@ -150,13 +157,16 @@ func InitNetworkPlugin(plugins []NetworkPlugin, networkPluginName string, host H
 			continue
 		}
 
+		//检查plugin是否已注册
 		if _, found := pluginMap[name]; found {
 			allErrs = append(allErrs, fmt.Errorf("network plugin %q was registered more than once", name))
 			continue
 		}
+		//完成注册
 		pluginMap[name] = plugin
 	}
 
+	//初始化chosePlugin插件
 	chosenPlugin := pluginMap[networkPluginName]
 	if chosenPlugin != nil {
 		err := chosenPlugin.Init(host, hairpinMode, nonMasqueradeCIDR, mtu)
@@ -206,6 +216,7 @@ func (plugin *NoopNetworkPlugin) Init(host Host, hairpinMode kubeletconfig.Hairp
 func (plugin *NoopNetworkPlugin) Event(name string, details map[string]interface{}) {
 }
 
+//noop网络插件名称
 func (plugin *NoopNetworkPlugin) Name() string {
 	return DefaultPluginName
 }
@@ -309,7 +320,8 @@ type PluginManager struct {
 	pods     map[string]*podLock
 }
 
-func NewPluginManager(plugin NetworkPlugin) *PluginManager {
+//plugin manager创建
+func NewPluginManager(plugin NetworkPlugin/*所管理插件*/) *PluginManager {
 	metrics.Register()
 	return &PluginManager{
 		plugin: plugin,
@@ -317,14 +329,17 @@ func NewPluginManager(plugin NetworkPlugin) *PluginManager {
 	}
 }
 
+//manger插件名称
 func (pm *PluginManager) PluginName() string {
 	return pm.plugin.Name()
 }
 
+//调用plugin完成事件处理
 func (pm *PluginManager) Event(name string, details map[string]interface{}) {
 	pm.plugin.Event(name, details)
 }
 
+//调用plugin完成状态返回
 func (pm *PluginManager) Status() error {
 	return pm.plugin.Status()
 }
@@ -383,6 +398,7 @@ func recordOperation(operation string, start time.Time) {
 	metrics.NetworkPluginOperationsLatency.WithLabelValues(operation).Observe(metrics.SinceInSeconds(start))
 }
 
+//调用plugin完成GetPodNetworkStatus状态返回
 func (pm *PluginManager) GetPodNetworkStatus(podNamespace, podName string, id kubecontainer.ContainerID) (*PodNetworkStatus, error) {
 	defer recordOperation("get_pod_network_status", time.Now())
 	fullPodName := kubecontainer.BuildPodFullName(podName, podNamespace)
@@ -397,6 +413,7 @@ func (pm *PluginManager) GetPodNetworkStatus(podNamespace, podName string, id ku
 	return netStatus, nil
 }
 
+//调用plugin完成SetUpPod回调
 func (pm *PluginManager) SetUpPod(podNamespace, podName string, id kubecontainer.ContainerID, annotations, options map[string]string) error {
 	defer recordOperation("set_up_pod", time.Now())
 	fullPodName := kubecontainer.BuildPodFullName(podName, podNamespace)
@@ -411,6 +428,7 @@ func (pm *PluginManager) SetUpPod(podNamespace, podName string, id kubecontainer
 	return nil
 }
 
+//调用plugin完成TearDownPod回调
 func (pm *PluginManager) TearDownPod(podNamespace, podName string, id kubecontainer.ContainerID) error {
 	defer recordOperation("tear_down_pod", time.Now())
 	fullPodName := kubecontainer.BuildPodFullName(podName, podNamespace)

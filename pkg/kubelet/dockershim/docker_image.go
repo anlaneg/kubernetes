@@ -103,7 +103,9 @@ func (ds *dockerService) PullImage(_ context.Context, r *runtimeapi.PullImageReq
 		authConfig.IdentityToken = auth.IdentityToken
 		authConfig.RegistryToken = auth.RegistryToken
 	}
-	err := ds.client.PullImage(image.Image,
+	
+	/*拉取镜像*/
+	err := ds.client.PullImage(image.Image/*镜像名称*/,
 		authConfig,
 		dockertypes.ImagePullOptions{},
 	)

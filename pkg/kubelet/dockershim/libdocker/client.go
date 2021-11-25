@@ -46,6 +46,7 @@ type Interface interface {
 	InspectContainer(id string) (*dockertypes.ContainerJSON, error)
 	InspectContainerWithSize(id string) (*dockertypes.ContainerJSON, error)
 	CreateContainer(dockertypes.ContainerCreateConfig) (*dockercontainer.ContainerCreateCreatedBody, error)
+	//启动容器
 	StartContainer(id string) error
 	StopContainer(id string, timeout time.Duration) error
 	UpdateContainerResources(id string, updateConfig dockercontainer.UpdateConfig) error
@@ -53,6 +54,7 @@ type Interface interface {
 	InspectImageByRef(imageRef string) (*dockertypes.ImageInspect, error)
 	InspectImageByID(imageID string) (*dockertypes.ImageInspect, error)
 	ListImages(opts dockertypes.ImageListOptions) ([]dockertypes.ImageSummary, error)
+	//拉镜像接口
 	PullImage(image string, auth dockertypes.AuthConfig, opts dockertypes.ImagePullOptions) error
 	RemoveImage(image string, opts dockertypes.ImageRemoveOptions) ([]dockertypes.ImageDeleteResponseItem, error)
 	ImageHistory(id string) ([]dockerimagetypes.HistoryResponseItem, error)
@@ -73,8 +75,9 @@ type Interface interface {
 func getDockerClient(dockerEndpoint string) (*dockerapi.Client, error) {
 	if len(dockerEndpoint) > 0 {
 		klog.Infof("Connecting to docker on %s", dockerEndpoint)
-		return dockerapi.NewClient(dockerEndpoint, "", nil, nil)
+		return dockerapi.NewClient(dockerEndpoint/*host地址*/, ""/*版本*/, nil, nil)
 	}
+	//通过dockerapi完成docker client获取
 	return dockerapi.NewClientWithOpts(dockerapi.FromEnv)
 }
 
@@ -84,11 +87,13 @@ func getDockerClient(dockerEndpoint string) (*dockerapi.Client, error) {
 // is the timeout for docker requests. If timeout is exceeded, the request
 // will be cancelled and throw out an error. If requestTimeout is 0, a default
 // value will be applied.
-func ConnectToDockerOrDie(dockerEndpoint string, requestTimeout, imagePullProgressDeadline time.Duration) Interface {
+func ConnectToDockerOrDie(dockerEndpoint string/*要连接的主机地址*/, requestTimeout, imagePullProgressDeadline time.Duration) Interface {
 	client, err := getDockerClient(dockerEndpoint)
 	if err != nil {
+		//连接docker失败
 		klog.Fatalf("Couldn't connect to docker: %v", err)
 	}
 	klog.Infof("Start docker client with request timeout=%v", requestTimeout)
+	//创建docker对应的client interface
 	return newKubeDockerClient(client, requestTimeout, imagePullProgressDeadline)
 }

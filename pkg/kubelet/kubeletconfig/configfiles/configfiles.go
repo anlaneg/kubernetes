@@ -58,6 +58,7 @@ func NewFsLoader(fs utilfs.Filesystem, kubeletFile string) (Loader, error) {
 }
 
 func (loader *fsLoader) Load() (*kubeletconfig.KubeletConfiguration, error) {
+	//读取文件
 	data, err := loader.fs.ReadFile(loader.kubeletFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read kubelet config file %q, error: %v", loader.kubeletFile, err)

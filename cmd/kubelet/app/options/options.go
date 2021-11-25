@@ -192,6 +192,7 @@ type KubeletFlags struct {
 }
 
 // NewKubeletFlags will create a new KubeletFlags with default values
+// 提供KubeletFlags的默认配置
 func NewKubeletFlags() *KubeletFlags {
 	remoteRuntimeEndpoint := ""
 	if runtime.GOOS == "linux" {
