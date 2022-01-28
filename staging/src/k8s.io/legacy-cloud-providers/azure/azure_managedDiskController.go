@@ -1,3 +1,4 @@
+//go:build !providerless
 // +build !providerless
 
 /*
@@ -21,11 +22,12 @@ package azure
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"path"
 	"strconv"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-07-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-12-01/compute"
 	"github.com/Azure/go-autorest/autorest/to"
 
 	v1 "k8s.io/api/core/v1"
@@ -33,7 +35,7 @@ import (
 	kwait "k8s.io/apimachinery/pkg/util/wait"
 	cloudvolume "k8s.io/cloud-provider/volume"
 	volumehelpers "k8s.io/cloud-provider/volume/helpers"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 const (
@@ -75,6 +77,8 @@ type ManagedDiskOptions struct {
 	SourceType string
 	// ResourceId of the disk encryption set to use for enabling encryption at rest.
 	DiskEncryptionSetID string
+	// The maximum number of VMs that can attach to the disk at the same time. Value greater than one indicates a disk that can be mounted on multiple VMs at the same time.
+	MaxShares int32
 }
 
 //CreateManagedDisk : create managed disk
@@ -82,10 +86,12 @@ func (c *ManagedDiskController) CreateManagedDisk(options *ManagedDiskOptions) (
 	var err error
 	klog.V(4).Infof("azureDisk - creating new managed Name:%s StorageAccountType:%s Size:%v", options.DiskName, options.StorageAccountType, options.SizeGB)
 
-	var createZones *[]string
+	var createZones []string
 	if len(options.AvailabilityZone) > 0 {
-		zoneList := []string{c.common.cloud.GetZoneID(options.AvailabilityZone)}
-		createZones = &zoneList
+		requestedZone := c.common.cloud.GetZoneID(options.AvailabilityZone)
+		if requestedZone != "" {
+			createZones = append(createZones, requestedZone)
+		}
 	}
 
 	// insert original tags to newTags
@@ -124,15 +130,15 @@ func (c *ManagedDiskController) CreateManagedDisk(options *ManagedDiskOptions) (
 		}
 		diskProperties.DiskIOPSReadWrite = to.Int64Ptr(diskIOPSReadWrite)
 
-		diskMBpsReadWrite := int32(defaultDiskMBpsReadWrite)
+		diskMBpsReadWrite := int64(defaultDiskMBpsReadWrite)
 		if options.DiskMBpsReadWrite != "" {
 			v, err := strconv.Atoi(options.DiskMBpsReadWrite)
 			if err != nil {
 				return "", fmt.Errorf("AzureDisk - failed to parse DiskMBpsReadWrite: %v", err)
 			}
-			diskMBpsReadWrite = int32(v)
+			diskMBpsReadWrite = int64(v)
 		}
-		diskProperties.DiskMBpsReadWrite = to.Int32Ptr(diskMBpsReadWrite)
+		diskProperties.DiskMBpsReadWrite = to.Int64Ptr(diskMBpsReadWrite)
 	} else {
 		if options.DiskIOPSReadWrite != "" {
 			return "", fmt.Errorf("AzureDisk - DiskIOPSReadWrite parameter is only applicable in UltraSSD_LRS disk type")
@@ -152,14 +158,21 @@ func (c *ManagedDiskController) CreateManagedDisk(options *ManagedDiskOptions) (
 		}
 	}
 
+	if options.MaxShares > 1 {
+		diskProperties.MaxShares = &options.MaxShares
+	}
+
 	model := compute.Disk{
 		Location: &c.common.location,
 		Tags:     newTags,
-		Zones:    createZones,
 		Sku: &compute.DiskSku{
 			Name: diskSku,
 		},
 		DiskProperties: &diskProperties,
+	}
+
+	if len(createZones) > 0 {
+		model.Zones = &createZones
 	}
 
 	if options.ResourceGroup == "" {
@@ -216,6 +229,10 @@ func (c *ManagedDiskController) DeleteManagedDisk(diskURI string) error {
 
 	disk, rerr := c.common.cloud.DisksClient.Get(ctx, resourceGroup, diskName)
 	if rerr != nil {
+		if rerr.HTTPStatusCode == http.StatusNotFound {
+			klog.V(2).Infof("azureDisk - disk(%s) is already deleted", diskURI)
+			return nil
+		}
 		return rerr.Error()
 	}
 
@@ -225,6 +242,10 @@ func (c *ManagedDiskController) DeleteManagedDisk(diskURI string) error {
 
 	rerr = c.common.cloud.DisksClient.Delete(ctx, resourceGroup, diskName)
 	if rerr != nil {
+		if rerr.HTTPStatusCode == http.StatusNotFound {
+			klog.V(2).Infof("azureDisk - disk(%s) is already deleted", diskURI)
+			return nil
+		}
 		return rerr.Error()
 	}
 	// We don't need poll here, k8s will immediately stop referencing the disk
@@ -273,7 +294,11 @@ func (c *ManagedDiskController) ResizeDisk(diskURI string, oldSize resource.Quan
 	}
 
 	// Azure resizes in chunks of GiB (not GB)
-	requestGiB := int32(volumehelpers.RoundUpToGiB(newSize))
+	requestGiB, err := volumehelpers.RoundUpToGiBInt32(newSize)
+	if err != nil {
+		return oldSize, err
+	}
+
 	newSizeQuant := resource.MustParse(fmt.Sprintf("%dGi", requestGiB))
 
 	klog.V(2).Infof("azureDisk - begin to resize disk(%s) with new size(%d), old size(%v)", diskName, requestGiB, oldSize)
@@ -282,11 +307,19 @@ func (c *ManagedDiskController) ResizeDisk(diskURI string, oldSize resource.Quan
 		return newSizeQuant, nil
 	}
 
-	result.DiskProperties.DiskSizeGB = &requestGiB
+	if result.DiskProperties.DiskState != compute.Unattached {
+		return oldSize, fmt.Errorf("azureDisk - disk resize is only supported on Unattached disk, current disk state: %s, already attached to %s", result.DiskProperties.DiskState, to.String(result.ManagedBy))
+	}
+
+	diskParameter := compute.DiskUpdate{
+		DiskUpdateProperties: &compute.DiskUpdateProperties{
+			DiskSizeGB: &requestGiB,
+		},
+	}
 
 	ctx, cancel = getContextWithCancel()
 	defer cancel()
-	if rerr := c.common.cloud.DisksClient.CreateOrUpdate(ctx, resourceGroup, diskName, result); rerr != nil {
+	if rerr := c.common.cloud.DisksClient.Update(ctx, resourceGroup, diskName, diskParameter); rerr != nil {
 		return oldSize, rerr.Error()
 	}
 
@@ -331,6 +364,13 @@ func (c *Cloud) GetAzureDiskLabels(diskURI string) (map[string]string, error) {
 		return nil, err
 	}
 
+	labels := map[string]string{
+		v1.LabelTopologyRegion: c.Location,
+	}
+	// no azure credential is set, return nil
+	if c.DisksClient == nil {
+		return labels, nil
+	}
 	// Get information of the disk.
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
@@ -343,7 +383,7 @@ func (c *Cloud) GetAzureDiskLabels(diskURI string) (map[string]string, error) {
 	// Check whether availability zone is specified.
 	if disk.Zones == nil || len(*disk.Zones) == 0 {
 		klog.V(4).Infof("Azure disk %q is not zoned", diskName)
-		return nil, nil
+		return labels, nil
 	}
 
 	zones := *disk.Zones
@@ -354,9 +394,6 @@ func (c *Cloud) GetAzureDiskLabels(diskURI string) (map[string]string, error) {
 
 	zone := c.makeZone(c.Location, zoneID)
 	klog.V(4).Infof("Got zone %q for Azure disk %q", zone, diskName)
-	labels := map[string]string{
-		v1.LabelZoneRegion:        c.Location,
-		v1.LabelZoneFailureDomain: zone,
-	}
+	labels[v1.LabelTopologyZone] = zone
 	return labels, nil
 }

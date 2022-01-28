@@ -20,16 +20,18 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	e2erc "k8s.io/kubernetes/test/e2e/framework/rc"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
@@ -41,9 +43,8 @@ var _ = SIGDescribe("Multi-AZ Clusters", func() {
 	f := framework.NewDefaultFramework("multi-az")
 	var zoneCount int
 	var err error
-	image := framework.ServeHostnameImage
+	var cleanUp func()
 	ginkgo.BeforeEach(func() {
-		e2eskipper.SkipUnlessProviderIs("gce", "gke", "aws")
 		if zoneCount <= 0 {
 			zoneCount, err = getZoneCount(f.ClientSet)
 			framework.ExpectNoError(err)
@@ -52,13 +53,27 @@ var _ = SIGDescribe("Multi-AZ Clusters", func() {
 		msg := fmt.Sprintf("Zone count is %d, only run for multi-zone clusters, skipping test", zoneCount)
 		e2eskipper.SkipUnlessAtLeast(zoneCount, 2, msg)
 		// TODO: SkipUnlessDefaultScheduler() // Non-default schedulers might not spread
+
+		cs := f.ClientSet
+		e2enode.WaitForTotalHealthy(cs, time.Minute)
+		nodeList, err := e2enode.GetReadySchedulableNodes(cs)
+		framework.ExpectNoError(err)
+
+		// make the nodes have balanced cpu,mem usage
+		cleanUp, err = createBalancedPodForNodes(f, cs, f.Namespace.Name, nodeList.Items, podRequestedResource, 0.0)
+		framework.ExpectNoError(err)
 	})
-	ginkgo.It("should spread the pods of a service across zones", func() {
-		SpreadServiceOrFail(f, (2*zoneCount)+1, image)
+	ginkgo.AfterEach(func() {
+		if cleanUp != nil {
+			cleanUp()
+		}
+	})
+	ginkgo.It("should spread the pods of a service across zones [Serial]", func() {
+		SpreadServiceOrFail(f, 5*zoneCount, imageutils.GetPauseImageName())
 	})
 
-	ginkgo.It("should spread the pods of a replication controller across zones", func() {
-		SpreadRCOrFail(f, int32((2*zoneCount)+1), image, []string{"serve-hostname"})
+	ginkgo.It("should spread the pods of a replication controller across zones [Serial]", func() {
+		SpreadRCOrFail(f, int32(5*zoneCount), framework.ServeHostnameImage, []string{"serve-hostname"})
 	})
 })
 
@@ -95,7 +110,7 @@ func SpreadServiceOrFail(f *framework.Framework, replicaCount int, image string)
 			Containers: []v1.Container{
 				{
 					Name:  "test",
-					Image: imageutils.GetPauseImageName(),
+					Image: image,
 				},
 			},
 		},
@@ -113,25 +128,25 @@ func SpreadServiceOrFail(f *framework.Framework, replicaCount int, image string)
 	framework.ExpectNoError(err)
 
 	// Now make sure they're spread across zones
-	zoneNames, err := framework.GetClusterZones(f.ClientSet)
+	zoneNames, err := e2enode.GetClusterZones(f.ClientSet)
 	framework.ExpectNoError(err)
 	checkZoneSpreading(f.ClientSet, pods, zoneNames.List())
 }
 
 // Find the name of the zone in which a Node is running
 func getZoneNameForNode(node v1.Node) (string, error) {
-	for key, value := range node.Labels {
-		if key == v1.LabelZoneFailureDomain {
-			return value, nil
-		}
+	if z, ok := node.Labels[v1.LabelFailureDomainBetaZone]; ok {
+		return z, nil
+	} else if z, ok := node.Labels[v1.LabelTopologyZone]; ok {
+		return z, nil
 	}
-	return "", fmt.Errorf("Zone name for node %s not found. No label with key %s",
-		node.Name, v1.LabelZoneFailureDomain)
+	return "", fmt.Errorf("node %s doesn't have zone label %s or %s",
+		node.Name, v1.LabelFailureDomainBetaZone, v1.LabelTopologyZone)
 }
 
 // Return the number of zones in which we have nodes in this cluster.
 func getZoneCount(c clientset.Interface) (int, error) {
-	zoneNames, err := framework.GetClusterZones(c)
+	zoneNames, err := e2enode.GetClusterZones(c)
 	if err != nil {
 		return -1, err
 	}
@@ -171,7 +186,7 @@ func checkZoneSpreading(c clientset.Interface, pods *v1.PodList, zoneNames []str
 			maxPodsPerZone = podCount
 		}
 	}
-	gomega.Expect(minPodsPerZone).To(gomega.BeNumerically("~", maxPodsPerZone, 1),
+	gomega.Expect(maxPodsPerZone-minPodsPerZone).To(gomega.BeNumerically("~", 0, 2),
 		"Pods were not evenly spread across zones.  %d in one zone and %d in another zone",
 		minPodsPerZone, maxPodsPerZone)
 }
@@ -227,7 +242,7 @@ func SpreadRCOrFail(f *framework.Framework, replicaCount int32, image string, ar
 	framework.ExpectNoError(err)
 
 	// Now make sure they're spread across zones
-	zoneNames, err := framework.GetClusterZones(f.ClientSet)
+	zoneNames, err := e2enode.GetClusterZones(f.ClientSet)
 	framework.ExpectNoError(err)
 	checkZoneSpreading(f.ClientSet, pods, zoneNames.List())
 }

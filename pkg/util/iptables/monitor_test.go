@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 /*
@@ -180,7 +181,7 @@ func (mfc *monitorFakeCmd) Stop() {
 
 func TestIPTablesMonitor(t *testing.T) {
 	mfe := newMonitorFakeExec()
-	ipt := New(mfe, ProtocolIpv4)
+	ipt := New(mfe, ProtocolIPv4)
 
 	var reloads uint32
 	stopCh := make(chan struct{})

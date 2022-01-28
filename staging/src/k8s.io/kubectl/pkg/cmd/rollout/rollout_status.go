@@ -23,7 +23,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -38,13 +37,14 @@ import (
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 	"k8s.io/kubectl/pkg/polymorphichelpers"
 	"k8s.io/kubectl/pkg/scheme"
+	"k8s.io/kubectl/pkg/util"
 	"k8s.io/kubectl/pkg/util/i18n"
 	"k8s.io/kubectl/pkg/util/interrupt"
 	"k8s.io/kubectl/pkg/util/templates"
 )
 
 var (
-	statusLong = templates.LongDesc(`
+	statusLong = templates.LongDesc(i18n.T(`
 		Show the status of the rollout.
 
 		By default 'rollout status' will watch the status of the latest rollout
@@ -52,7 +52,7 @@ var (
 		you can use --watch=false. Note that if a new rollout starts in-between, then
 		'rollout status' will continue watching the latest revision. If you want to
 		pin to a specific revision and abort if it is rolled over by another revision,
-		use --revision=N where N is the revision you need to watch for.`)
+		use --revision=N where N is the revision you need to watch for.`))
 
 	statusExample = templates.Examples(`
 		# Watch the rollout status of a deployment
@@ -66,6 +66,7 @@ type RolloutStatusOptions struct {
 	Namespace        string
 	EnforceNamespace bool
 	BuilderArgs      []string
+	LabelSelector    string
 
 	Watch    bool
 	Revision int64
@@ -102,12 +103,12 @@ func NewCmdRolloutStatus(f cmdutil.Factory, streams genericclioptions.IOStreams)
 		Short:                 i18n.T("Show the status of the rollout"),
 		Long:                  statusLong,
 		Example:               statusExample,
+		ValidArgsFunction:     util.SpecifiedResourceTypeAndNameNoRepeatCompletionFunc(f, validArgs),
 		Run: func(cmd *cobra.Command, args []string) {
 			cmdutil.CheckErr(o.Complete(f, args))
 			cmdutil.CheckErr(o.Validate())
 			cmdutil.CheckErr(o.Run())
 		},
-		ValidArgs: validArgs,
 	}
 
 	usage := "identifying the resource to get from a server."
@@ -115,6 +116,7 @@ func NewCmdRolloutStatus(f cmdutil.Factory, streams genericclioptions.IOStreams)
 	cmd.Flags().BoolVarP(&o.Watch, "watch", "w", o.Watch, "Watch the status of the rollout until it's done.")
 	cmd.Flags().Int64Var(&o.Revision, "revision", o.Revision, "Pin to a specific revision for showing its status. Defaults to 0 (last revision).")
 	cmd.Flags().DurationVar(&o.Timeout, "timeout", o.Timeout, "The length of time to wait before ending watch, zero means never. Any other values should contain a corresponding time unit (e.g. 1s, 2m, 3h).")
+	cmdutil.AddLabelSelectorFlagVar(cmd, &o.LabelSelector)
 
 	return cmd
 }
@@ -163,6 +165,7 @@ func (o *RolloutStatusOptions) Run() error {
 	r := o.Builder().
 		WithScheme(scheme.Scheme, scheme.Scheme.PrioritizedVersionsAllGroups()...).
 		NamespaceParam(o.Namespace).DefaultNamespace().
+		LabelSelectorParam(o.LabelSelector).
 		FilenameParam(o.EnforceNamespace, o.FilenameOptions).
 		ResourceTypeOrNameArgs(true, o.BuilderArgs...).
 		SingleResourceType().
@@ -200,25 +203,11 @@ func (o *RolloutStatusOptions) Run() error {
 		},
 	}
 
-	preconditionFunc := func(store cache.Store) (bool, error) {
-		_, exists, err := store.Get(&metav1.ObjectMeta{Namespace: info.Namespace, Name: info.Name})
-		if err != nil {
-			return true, err
-		}
-		if !exists {
-			// We need to make sure we see the object in the cache before we start waiting for events
-			// or we would be waiting for the timeout if such object didn't exist.
-			return true, apierrors.NewNotFound(mapping.Resource.GroupResource(), info.Name)
-		}
-
-		return false, nil
-	}
-
 	// if the rollout isn't done yet, keep watching deployment status
 	ctx, cancel := watchtools.ContextWithOptionalTimeout(context.Background(), o.Timeout)
 	intr := interrupt.New(nil, cancel)
 	return intr.Run(func() error {
-		_, err = watchtools.UntilWithSync(ctx, lw, &unstructured.Unstructured{}, preconditionFunc, func(e watch.Event) (bool, error) {
+		_, err = watchtools.UntilWithSync(ctx, lw, &unstructured.Unstructured{}, nil, func(e watch.Event) (bool, error) {
 			switch t := e.Type; t {
 			case watch.Added, watch.Modified:
 				status, done, err := statusViewer.Status(e.Object.(runtime.Unstructured), o.Revision)

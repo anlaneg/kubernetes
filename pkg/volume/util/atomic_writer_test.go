@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 /*
@@ -753,7 +754,7 @@ func checkVolumeContents(targetDir, tcName string, payload map[string]FileProjec
 	dataDirPath := filepath.Join(targetDir, dataDirName)
 	// use filepath.Walk to reconstruct the payload, then deep equal
 	observedPayload := make(map[string]FileProjection)
-	visitor := func(path string, info os.FileInfo, err error) error {
+	visitor := func(path string, info os.FileInfo, _ error) error {
 		if info.IsDir() {
 			return nil
 		}

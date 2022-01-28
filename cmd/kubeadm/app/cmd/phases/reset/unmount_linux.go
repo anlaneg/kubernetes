@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 /*
@@ -23,7 +24,7 @@ import (
 	"strings"
 	"syscall"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // unmountKubeletDirectory unmounts all paths that contain KubeletRunDirectory
@@ -32,6 +33,12 @@ func unmountKubeletDirectory(absoluteKubeletRunDirectory string) error {
 	if err != nil {
 		return err
 	}
+
+	if !strings.HasSuffix(absoluteKubeletRunDirectory, "/") {
+		// trailing "/" is needed to ensure that possibly mounted /var/lib/kubelet is skipped
+		absoluteKubeletRunDirectory += "/"
+	}
+
 	mounts := strings.Split(string(raw), "\n")
 	for _, mount := range mounts {
 		m := strings.Split(mount, " ")

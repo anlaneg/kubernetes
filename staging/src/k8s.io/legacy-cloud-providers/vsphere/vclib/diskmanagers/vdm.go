@@ -23,7 +23,7 @@ import (
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/vim25/types"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/legacy-cloud-providers/vsphere/vclib"
 )
 
@@ -70,6 +70,11 @@ func (diskManager virtualDiskManager) Create(ctx context.Context, datastore *vcl
 	taskInfo, err := task.WaitForResult(ctx, nil)
 	vclib.RecordvSphereMetric(vclib.APICreateVolume, requestTime, err)
 	if err != nil {
+		if isAlreadyExists(diskManager.diskPath, err) {
+			// The disk already exists, log info message and return success
+			klog.V(vclib.LogLevel).Infof("File: %v already exists", diskManager.diskPath)
+			return diskManager.diskPath, nil
+		}
 		klog.Errorf("Failed to complete virtual disk creation: %s. err: %+v", diskManager.diskPath, err)
 		return "", err
 	}
@@ -92,7 +97,7 @@ func (diskManager virtualDiskManager) Delete(ctx context.Context, datacenter *vc
 	}
 	err = task.Wait(ctx)
 	vclib.RecordvSphereMetric(vclib.APIDeleteVolume, requestTime, err)
-	if err != nil {
+	if err != nil && !types.IsFileNotFound(err) {
 		klog.Errorf("Failed to delete virtual disk. err: %v", err)
 		return err
 	}

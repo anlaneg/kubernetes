@@ -63,31 +63,31 @@ func TestTaintNodeByCondition(t *testing.T) {
 	// Build PodToleration Admission.
 	admission := podtolerationrestriction.NewPodTolerationsPlugin(&pluginapi.Configuration{})
 
-	testCtx := testutils.InitTestMaster(t, "default", admission)
+	testCtx := testutils.InitTestAPIServer(t, "default", admission)
 
 	// Build clientset and informers for controllers.
 	externalClientset := kubernetes.NewForConfigOrDie(&restclient.Config{
 		QPS:           -1,
 		Host:          testCtx.HTTPServer.URL,
 		ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Group: "", Version: "v1"}}})
-	externalInformers := informers.NewSharedInformerFactory(externalClientset, time.Second)
+	externalInformers := informers.NewSharedInformerFactory(externalClientset, 0)
 
 	admission.SetExternalKubeClientSet(externalClientset)
 	admission.SetExternalKubeInformerFactory(externalInformers)
 
-	testCtx = testutils.InitTestScheduler(t, testCtx, false, nil)
+	testCtx = testutils.InitTestScheduler(t, testCtx)
 	defer testutils.CleanupTest(t, testCtx)
 
 	cs := testCtx.ClientSet
-	informers := testCtx.InformerFactory
 	nsName := testCtx.NS.Name
 
 	// Start NodeLifecycleController for taint.
 	nc, err := nodelifecycle.NewNodeLifecycleController(
-		informers.Coordination().V1().Leases(),
-		informers.Core().V1().Pods(),
-		informers.Core().V1().Nodes(),
-		informers.Apps().V1().DaemonSets(),
+		context.TODO(),
+		externalInformers.Coordination().V1().Leases(),
+		externalInformers.Core().V1().Pods(),
+		externalInformers.Core().V1().Nodes(),
+		externalInformers.Apps().V1().DaemonSets(),
 		cs,
 		time.Hour,   // Node monitor grace period
 		time.Second, // Node startup grace period
@@ -103,13 +103,15 @@ func TestTaintNodeByCondition(t *testing.T) {
 		t.Errorf("Failed to create node controller: %v", err)
 		return
 	}
-	go nc.Run(testCtx.Ctx.Done())
 
-	// Waiting for all controller sync.
+	// Waiting for all controllers to sync
 	externalInformers.Start(testCtx.Ctx.Done())
 	externalInformers.WaitForCacheSync(testCtx.Ctx.Done())
-	informers.Start(testCtx.Ctx.Done())
-	informers.WaitForCacheSync(testCtx.Ctx.Done())
+	testutils.SyncInformerFactory(testCtx)
+
+	// Run all controllers
+	go nc.Run(testCtx.Ctx)
+	go testCtx.Scheduler.Run(testCtx.Ctx)
 
 	// -------------------------------------------
 	// Test TaintNodeByCondition feature.

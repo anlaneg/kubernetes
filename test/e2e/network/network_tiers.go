@@ -21,7 +21,7 @@ import (
 	"net/http"
 	"time"
 
-	computealpha "google.golang.org/api/compute/v0.alpha"
+	compute "google.golang.org/api/compute/v1"
 
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	v1 "k8s.io/api/core/v1"
@@ -32,12 +32,13 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework/providers/gce"
 	e2eservice "k8s.io/kubernetes/test/e2e/framework/service"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
+	"k8s.io/kubernetes/test/e2e/network/common"
 	gcecloud "k8s.io/legacy-cloud-providers/gce"
 
 	"github.com/onsi/ginkgo"
 )
 
-var _ = SIGDescribe("Services [Feature:GCEAlphaFeature][Slow]", func() {
+var _ = common.SIGDescribe("Services GCE [Slow]", func() {
 	f := framework.NewDefaultFramework("services")
 
 	var cs clientset.Interface
@@ -92,7 +93,7 @@ var _ = SIGDescribe("Services [Feature:GCEAlphaFeature][Slow]", func() {
 		// Test 2: re-create a LB of a different tier for the updated Service.
 		ginkgo.By("updating the Service to use the premium (default) tier")
 		svc, err = jig.UpdateService(func(svc *v1.Service) {
-			clearNetworkTier(svc)
+			setNetworkTier(svc, string(gcecloud.NetworkTierAnnotationPremium))
 		})
 		framework.ExpectNoError(err)
 		// Verify that service has been updated properly.
@@ -109,7 +110,7 @@ var _ = SIGDescribe("Services [Feature:GCEAlphaFeature][Slow]", func() {
 		requestedAddrName := fmt.Sprintf("e2e-ext-lb-net-tier-%s", framework.RunID)
 		gceCloud, err := gce.GetGCECloud()
 		framework.ExpectNoError(err)
-		requestedIP, err := reserveAlphaRegionalAddress(gceCloud, requestedAddrName, cloud.NetworkTierStandard)
+		requestedIP, err := reserveRegionalAddress(gceCloud, requestedAddrName, cloud.NetworkTierStandard)
 		framework.ExpectNoError(err, "failed to reserve a STANDARD tiered address")
 		defer func() {
 			if requestedAddrName != "" {
@@ -156,7 +157,7 @@ func waitAndVerifyLBWithTier(jig *e2eservice.TestJig, existingIP string, waitTim
 	}
 	// If the IP has been used by previous test, sometimes we get the lingering
 	// 404 errors even after the LB is long gone. Tolerate and retry until the
-	// the new LB is fully established since this feature is still Alpha in GCP.
+	// the new LB is fully established.
 	e2eservice.TestReachableHTTPWithRetriableErrorCodes(ingressIP, svcPort, []int{http.StatusNotFound}, checkTimeout)
 
 	// Verify the network tier matches the desired.
@@ -170,7 +171,7 @@ func waitAndVerifyLBWithTier(jig *e2eservice.TestJig, existingIP string, waitTim
 }
 
 func getLBNetworkTierByIP(ip string) (cloud.NetworkTier, error) {
-	var rule *computealpha.ForwardingRule
+	var rule *compute.ForwardingRule
 	// Retry a few times to tolerate flakes.
 	err := wait.PollImmediate(5*time.Second, 15*time.Second, func() (bool, error) {
 		obj, err := getGCEForwardingRuleByIP(ip)
@@ -186,12 +187,12 @@ func getLBNetworkTierByIP(ip string) (cloud.NetworkTier, error) {
 	return cloud.NetworkTierGCEValueToType(rule.NetworkTier), nil
 }
 
-func getGCEForwardingRuleByIP(ip string) (*computealpha.ForwardingRule, error) {
+func getGCEForwardingRuleByIP(ip string) (*compute.ForwardingRule, error) {
 	cloud, err := gce.GetGCECloud()
 	if err != nil {
 		return nil, err
 	}
-	ruleList, err := cloud.ListAlphaRegionForwardingRules(cloud.Region())
+	ruleList, err := cloud.ListRegionForwardingRules(cloud.Region())
 	if err != nil {
 		return nil, err
 	}
@@ -211,23 +212,14 @@ func setNetworkTier(svc *v1.Service, tier string) {
 	svc.ObjectMeta.Annotations[key] = tier
 }
 
-func clearNetworkTier(svc *v1.Service) {
-	key := gcecloud.NetworkTierAnnotationKey
-	if svc.ObjectMeta.Annotations == nil {
-		return
-	}
-	delete(svc.ObjectMeta.Annotations, key)
-}
-
 // TODO: add retries if this turns out to be flaky.
-// TODO(#51665): remove this helper function once Network Tiers becomes beta.
-func reserveAlphaRegionalAddress(cloud *gcecloud.Cloud, name string, netTier cloud.NetworkTier) (string, error) {
-	alphaAddr := &computealpha.Address{
+func reserveRegionalAddress(cloud *gcecloud.Cloud, name string, netTier cloud.NetworkTier) (string, error) {
+	Addr := &compute.Address{
 		Name:        name,
 		NetworkTier: netTier.ToGCEValue(),
 	}
 
-	if err := cloud.ReserveAlphaRegionAddress(alphaAddr, cloud.Region()); err != nil {
+	if err := cloud.ReserveRegionAddress(Addr, cloud.Region()); err != nil {
 		return "", err
 	}
 

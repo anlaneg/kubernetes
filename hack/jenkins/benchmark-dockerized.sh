@@ -31,6 +31,10 @@ retry() {
   "$@"
 }
 
+# The root of the build/dist directory
+KUBE_ROOT=$(dirname "${BASH_SOURCE[0]}")/../..
+export KUBE_ROOT
+
 # Runs benchmark integration tests, producing pretty-printed results
 # in ${WORKSPACE}/artifacts. This script can also be run within a
 # kubekins-test container with a kubernetes repo mounted (at the path
@@ -43,8 +47,11 @@ export PATH=${GOPATH}/bin:${PWD}/third_party/etcd:/usr/local/go/bin:${PATH}
 # As individual scripts make use of go modules, they can explicitly set GO111MODULE=on
 export GO111MODULE=off
 
-go install k8s.io/kubernetes/vendor/github.com/cespare/prettybench
-go install k8s.io/kubernetes/vendor/gotest.tools/gotestsum
+# Install tools we need
+pushd "${KUBE_ROOT}/hack/tools" >/dev/null
+  GO111MODULE=on go install github.com/cespare/prettybench
+  GO111MODULE=on go install gotest.tools/gotestsum
+popd >/dev/null
 
 # Disable the Go race detector.
 export KUBE_RACE=" "

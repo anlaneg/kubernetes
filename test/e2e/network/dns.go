@@ -26,8 +26,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	e2eservice "k8s.io/kubernetes/test/e2e/framework/service"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
+	"k8s.io/kubernetes/test/e2e/network/common"
 
 	"github.com/onsi/ginkgo"
 )
@@ -35,11 +37,11 @@ import (
 const dnsTestPodHostName = "dns-querier-1"
 const dnsTestServiceName = "dns-test-service"
 
-var _ = SIGDescribe("DNS", func() {
+var _ = common.SIGDescribe("DNS", func() {
 	f := framework.NewDefaultFramework("dns")
 
 	/*
-		Release : v1.9
+		Release: v1.9
 		Testname: DNS, cluster
 		Description: When a Pod is created, the pod MUST be able to resolve cluster dns entries such as kubernetes.default via DNS.
 	*/
@@ -106,7 +108,7 @@ var _ = SIGDescribe("DNS", func() {
 	})
 
 	/*
-		Release : v1.14
+		Release: v1.14
 		Testname: DNS, cluster
 		Description: When a Pod is created, the pod MUST be able to resolve cluster dns entries such as kubernetes.default via /etc/hosts.
 	*/
@@ -126,7 +128,7 @@ var _ = SIGDescribe("DNS", func() {
 	})
 
 	/*
-		Release : v1.9
+		Release: v1.9
 		Testname: DNS, services
 		Description: When a headless service is created, the service MUST be able to resolve all the required service endpoints. When the service is created, any pod in the same namespace must be able to resolve the service by all of the expected DNS names.
 	*/
@@ -408,7 +410,7 @@ var _ = SIGDescribe("DNS", func() {
 		ginkgo.By("Creating a pod with dnsPolicy=None and customized dnsConfig...")
 		testServerIP := "1.1.1.1"
 		testSearchPath := "resolv.conf.local"
-		testAgnhostPod := f.NewAgnhostPod(f.Namespace.Name, "pause")
+		testAgnhostPod := e2epod.NewAgnhostPod(f.Namespace.Name, "test-dns-nameservers", nil, nil, nil)
 		testAgnhostPod.Spec.DNSPolicy = v1.DNSNone
 		testAgnhostPod.Spec.DNSConfig = &v1.PodDNSConfig{
 			Nameservers: []string{testServerIP},
@@ -423,7 +425,7 @@ var _ = SIGDescribe("DNS", func() {
 				framework.Failf("ginkgo.Failed to delete pod %s: %v", testAgnhostPod.Name, err)
 			}
 		}()
-		err = f.WaitForPodReady(testAgnhostPod.Name)
+		err = e2epod.WaitTimeoutForPodReadyInNamespace(f.ClientSet, testAgnhostPod.Name, f.Namespace.Name, framework.PodStartTimeout)
 		framework.ExpectNoError(err, "failed to wait for pod %s to be running", testAgnhostPod.Name)
 
 		runCommand := func(arg string) string {
@@ -432,7 +434,7 @@ var _ = SIGDescribe("DNS", func() {
 				Command:       cmd,
 				Namespace:     f.Namespace.Name,
 				PodName:       testAgnhostPod.Name,
-				ContainerName: "agnhost",
+				ContainerName: testAgnhostPod.Spec.Containers[0].Name,
 				CaptureStdout: true,
 				CaptureStderr: true,
 			})
@@ -482,7 +484,7 @@ var _ = SIGDescribe("DNS", func() {
 				framework.Failf("ginkgo.Failed to delete pod %s: %v", testServerPod.Name, err)
 			}
 		}()
-		err = f.WaitForPodRunning(testServerPod.Name)
+		err = e2epod.WaitForPodNameRunningInNamespace(f.ClientSet, testServerPod.Name, f.Namespace.Name)
 		framework.ExpectNoError(err, "failed to wait for pod %s to be running", testServerPod.Name)
 
 		// Retrieve server pod IP.
@@ -492,7 +494,7 @@ var _ = SIGDescribe("DNS", func() {
 		framework.Logf("testServerIP is %s", testServerIP)
 
 		ginkgo.By("Creating a pod with dnsPolicy=None and customized dnsConfig...")
-		testUtilsPod := generateDNSUtilsPod()
+		testUtilsPod := e2epod.NewAgnhostPod(f.Namespace.Name, "e2e-dns-utils", nil, nil, nil)
 		testUtilsPod.Spec.DNSPolicy = v1.DNSNone
 		testNdotsValue := "2"
 		testUtilsPod.Spec.DNSConfig = &v1.PodDNSConfig{
@@ -514,7 +516,7 @@ var _ = SIGDescribe("DNS", func() {
 				framework.Failf("ginkgo.Failed to delete pod %s: %v", testUtilsPod.Name, err)
 			}
 		}()
-		err = f.WaitForPodRunning(testUtilsPod.Name)
+		err = e2epod.WaitForPodNameRunningInNamespace(f.ClientSet, testUtilsPod.Name, f.Namespace.Name)
 		framework.ExpectNoError(err, "failed to wait for pod %s to be running", testUtilsPod.Name)
 
 		ginkgo.By("Verifying customized DNS option is configured on pod...")
@@ -524,7 +526,7 @@ var _ = SIGDescribe("DNS", func() {
 			Command:       cmd,
 			Namespace:     f.Namespace.Name,
 			PodName:       testUtilsPod.Name,
-			ContainerName: "util",
+			ContainerName: testUtilsPod.Spec.Containers[0].Name,
 			CaptureStdout: true,
 			CaptureStderr: true,
 		})
@@ -544,7 +546,7 @@ var _ = SIGDescribe("DNS", func() {
 				Command:       cmd,
 				Namespace:     f.Namespace.Name,
 				PodName:       testUtilsPod.Name,
-				ContainerName: "util",
+				ContainerName: testUtilsPod.Spec.Containers[0].Name,
 				CaptureStdout: true,
 				CaptureStderr: true,
 			})

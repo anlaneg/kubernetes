@@ -24,8 +24,8 @@ import (
 	"strings"
 	"testing"
 
-	"k8s.io/utils/exec/testing"
-	"k8s.io/utils/mount"
+	"k8s.io/mount-utils"
+	testingexec "k8s.io/utils/exec/testing"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,7 +48,7 @@ func TestCanSupport(t *testing.T) {
 
 	plug, err := plugMgr.FindPluginByName("kubernetes.io/fc")
 	if err != nil {
-		t.Errorf("Can't find the plugin by name")
+		t.Fatal("Can't find the plugin by name")
 	}
 	if plug.GetPluginName() != "kubernetes.io/fc" {
 		t.Errorf("Wrong name: %s", plug.GetPluginName())
@@ -122,10 +122,6 @@ func (fake *fakeDiskManager) AttachDisk(b fcDiskMounter) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Simulate the global mount so that the fakeMounter returns the
-	// expected number of mounts for the attached disk.
-	b.mounter.Mount(globalPath, globalPath, b.fsType, nil)
-
 	fake.attachCalled = true
 	return "", nil
 }
@@ -194,7 +190,7 @@ func doTestPlugin(t *testing.T, spec *volume.Spec) {
 
 	fakeManager2 := newFakeDiskManager()
 	defer fakeManager2.Cleanup()
-	unmounter, err := plug.(*fcPlugin).newUnmounterInternal("vol1", types.UID("poduid"), fakeManager2, fakeMounter)
+	unmounter, err := plug.(*fcPlugin).newUnmounterInternal("vol1", types.UID("poduid"), fakeManager2, fakeMounter, fakeExec)
 	if err != nil {
 		t.Errorf("Failed to make a new Unmounter: %v", err)
 	}

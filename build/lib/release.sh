@@ -28,8 +28,7 @@ readonly RELEASE_STAGE="${LOCAL_OUTPUT_ROOT}/release-stage"
 readonly RELEASE_TARS="${LOCAL_OUTPUT_ROOT}/release-tars"
 readonly RELEASE_IMAGES="${LOCAL_OUTPUT_ROOT}/release-images"
 
-KUBE_BUILD_HYPERKUBE=${KUBE_BUILD_HYPERKUBE:-y}
-KUBE_BUILD_CONFORMANCE=${KUBE_BUILD_CONFORMANCE:-y}
+KUBE_BUILD_CONFORMANCE=${KUBE_BUILD_CONFORMANCE:-n}
 KUBE_BUILD_PULL_LATEST_IMAGES=${KUBE_BUILD_PULL_LATEST_IMAGES:-y}
 
 # Validate a ci version
@@ -126,8 +125,13 @@ function kube::release::package_src_tarball() {
 # Package up all of the cross compiled clients. Over time this should grow into
 # a full SDK
 function kube::release::package_client_tarballs() {
-   # Find all of the built client binaries
-  for platform_long in "${LOCAL_OUTPUT_BINPATH}"/*/*; do
+  # Find all of the built client binaries
+  local long_platforms=("${LOCAL_OUTPUT_BINPATH}"/*/*)
+  if [[ -n ${KUBE_BUILD_PLATFORMS-} ]]; then
+    read -ra long_platforms <<< "${KUBE_BUILD_PLATFORMS}"
+  fi
+
+  for platform_long in "${long_platforms[@]}"; do
     local platform
     local platform_tag
     platform=${platform_long##${LOCAL_OUTPUT_BINPATH}/} # Strip LOCAL_OUTPUT_BINPATH
@@ -199,7 +203,7 @@ function kube::release::package_node_tarballs() {
     cp "${client_bins[@]/#/${LOCAL_OUTPUT_BINPATH}/${platform}/}" \
       "${release_stage}/node/bin/"
 
-    cp "${KUBE_ROOT}/Godeps/LICENSES" "${release_stage}/"
+    cp -R "${KUBE_ROOT}/LICENSES" "${release_stage}/"
 
     cp "${RELEASE_TARS}/kubernetes-src.tar.gz" "${release_stage}/"
 
@@ -212,6 +216,8 @@ function kube::release::package_node_tarballs() {
 
 # Package up all of the server binaries in docker images
 function kube::release::build_server_images() {
+  kube::util::ensure-docker-buildx
+
   # Clean out any old images
   rm -rf "${RELEASE_IMAGES}"
   local platform
@@ -271,7 +277,7 @@ function kube::release::package_server_tarballs() {
     cp "${client_bins[@]/#/${LOCAL_OUTPUT_BINPATH}/${platform}/}" \
       "${release_stage}/server/bin/"
 
-    cp "${KUBE_ROOT}/Godeps/LICENSES" "${release_stage}/"
+    cp -R "${KUBE_ROOT}/LICENSES" "${release_stage}/"
 
     cp "${RELEASE_TARS}/kubernetes-src.tar.gz" "${release_stage}/"
 
@@ -299,24 +305,6 @@ function kube::release::sha1() {
   fi
 }
 
-function kube::release::build_hyperkube_image() {
-  local -r arch="$1"
-  local -r registry="$2"
-  local -r version="$3"
-  local -r save_dir="${4-}"
-  kube::log::status "Building hyperkube image for arch: ${arch}"
-  ARCH="${arch}" REGISTRY="${registry}" VERSION="${version}" \
-    make -C cluster/images/hyperkube/ build >/dev/null
-
-  local hyperkube_tag
-  hyperkube_tag="${registry}/hyperkube-${arch}:${version}"
-  if [[ -n "${save_dir}" ]]; then
-    "${DOCKER[@]}" save "${hyperkube_tag}" > "${save_dir}/hyperkube-${arch}.tar"
-  fi
-  kube::log::status "Deleting hyperkube image ${hyperkube_tag}"
-  "${DOCKER[@]}" rmi "${hyperkube_tag}" &>/dev/null || true
-}
-
 function kube::release::build_conformance_image() {
   local -r arch="$1"
   local -r registry="$2"
@@ -324,7 +312,7 @@ function kube::release::build_conformance_image() {
   local -r save_dir="${4-}"
   kube::log::status "Building conformance image for arch: ${arch}"
   ARCH="${arch}" REGISTRY="${registry}" VERSION="${version}" \
-    make -C cluster/images/conformance/ build >/dev/null
+    make -C test/conformance/image/ build >/dev/null
 
   local conformance_tag
   conformance_tag="${registry}/conformance-${arch}:${version}"
@@ -348,7 +336,7 @@ function kube::release::create_docker_images_for_server() {
     local images_dir
     binary_dir="$1"
     arch="$2"
-    binaries=$(kube::build::get_docker_wrapped_binaries "${arch}")
+    binaries=$(kube::build::get_docker_wrapped_binaries)
     images_dir="${RELEASE_IMAGES}/${arch}"
     mkdir -p "${images_dir}"
 
@@ -378,26 +366,35 @@ function kube::release::create_docker_images_for_server() {
       local base_image=${wrappable##*,}
       local binary_file_path="${binary_dir}/${binary_name}"
       local docker_build_path="${binary_file_path}.dockerbuild"
-      local docker_file_path="${docker_build_path}/Dockerfile"
       local docker_image_tag="${docker_registry}/${binary_name}-${arch}:${docker_tag}"
+
+      local docker_file_path="${KUBE_ROOT}/build/server-image/Dockerfile"
+      # If this binary has its own Dockerfile use that else use the generic Dockerfile.
+      if [[ -f "${KUBE_ROOT}/build/server-image/${binary_name}/Dockerfile" ]]; then
+          docker_file_path="${KUBE_ROOT}/build/server-image/${binary_name}/Dockerfile"
+      fi
 
       kube::log::status "Starting docker build for image: ${binary_name}-${arch}"
       (
         rm -rf "${docker_build_path}"
         mkdir -p "${docker_build_path}"
         ln "${binary_file_path}" "${docker_build_path}/${binary_name}"
-        ln "${KUBE_ROOT}/build/nsswitch.conf" "${docker_build_path}/nsswitch.conf"
-        chmod 0644 "${docker_build_path}/nsswitch.conf"
-        cat <<EOF > "${docker_file_path}"
-FROM ${base_image}
-COPY ${binary_name} /usr/local/bin/${binary_name}
-EOF
-        # ensure /etc/nsswitch.conf exists so go's resolver respects /etc/hosts
-        if [[ "${base_image}" =~ busybox ]]; then
-          echo "COPY nsswitch.conf /etc/" >> "${docker_file_path}"
-        fi
 
-        "${DOCKER[@]}" build ${docker_build_opts:+"${docker_build_opts}"} -q -t "${docker_image_tag}" "${docker_build_path}" >/dev/null
+        local build_log="${docker_build_path}/build.log"
+        if ! DOCKER_CLI_EXPERIMENTAL=enabled "${DOCKER[@]}" buildx build \
+          -f "${docker_file_path}" \
+          --platform linux/"${arch}" \
+          --load ${docker_build_opts:+"${docker_build_opts}"} \
+          -t "${docker_image_tag}" \
+          --build-arg BASEIMAGE="${base_image}" \
+          --build-arg SETCAP_IMAGE="${KUBE_BUILD_SETCAP_IMAGE}" \
+          --build-arg BINARY="${binary_name}" \
+          "${docker_build_path}" >"${build_log}" 2>&1; then
+            cat "${build_log}"
+            exit 1
+        fi
+        rm "${build_log}"
+
         # If we are building an official/alpha/beta release we want to keep
         # docker images and tag them appropriately.
         local -r release_docker_image_tag="${KUBE_DOCKER_REGISTRY-$docker_registry}/${binary_name}-${arch}:${KUBE_DOCKER_IMAGE_TAG-$docker_tag}"
@@ -416,10 +413,6 @@ EOF
       ) &
     done
 
-    if [[ "${KUBE_BUILD_HYPERKUBE}" =~ [yY] ]]; then
-      kube::release::build_hyperkube_image "${arch}" "${docker_registry}" \
-        "${docker_tag}" "${images_dir}" &
-    fi
     if [[ "${KUBE_BUILD_CONFORMANCE}" =~ [yY] ]]; then
       kube::release::build_conformance_image "${arch}" "${docker_registry}" \
         "${docker_tag}" "${images_dir}" &
@@ -452,7 +445,6 @@ function kube::release::package_kube_manifests_tarball() {
   cp "${src_dir}/kube-controller-manager.manifest" "${dst_dir}"
   cp "${src_dir}/kube-addon-manager.yaml" "${dst_dir}"
   cp "${src_dir}/glbc.manifest" "${dst_dir}"
-  cp "${src_dir}/etcd-empty-dir-cleanup.yaml" "${dst_dir}/"
   find "${src_dir}" -name 'internal-*' -exec cp {} "${dst_dir}" \;
   cp "${KUBE_ROOT}/cluster/gce/gci/configure-helper.sh" "${dst_dir}/gci-configure-helper.sh"
   cp "${KUBE_ROOT}/cluster/gce/gci/configure-kubeapiserver.sh" "${dst_dir}/configure-kubeapiserver.sh"
@@ -462,7 +454,7 @@ function kube::release::package_kube_manifests_tarball() {
   cp "${KUBE_ROOT}/cluster/gce/gci/health-monitor.sh" "${dst_dir}/health-monitor.sh"
   # Merge GCE-specific addons with general purpose addons.
   for d in cluster/addons cluster/gce/addons; do
-    find "${KUBE_ROOT}/${d}" \( \( -name \*.yaml -o -name \*.yaml.in -o -name \*.json \) -a ! \( -name \*demo\* \) \) -print0 | tar c --transform "s|${KUBE_ROOT#/*}/${d}||" --null -T - | "${TAR}" x -C "${dst_dir}"
+    find "${KUBE_ROOT}/${d}" \( \( -name \*.yaml -o -name \*.yaml.in -o -name \*.json \) -a ! \( -name \*demo\* \) \) -print0 | "${TAR}" c --transform "s|${KUBE_ROOT#/*}/${d}||" --null -T - | "${TAR}" x -C "${dst_dir}"
   done
 
   kube::release::clean_cruft
@@ -528,7 +520,7 @@ function kube::release::package_test_tarballs() {
   # the portable test tarball.
   mkdir -p "${release_stage}/test/images"
   cp -fR "${KUBE_ROOT}/test/images" "${release_stage}/test/"
-  tar c "${KUBE_TEST_PORTABLE[@]}" | tar x -C "${release_stage}"
+  "${TAR}" c "${KUBE_TEST_PORTABLE[@]}" | "${TAR}" x -C "${release_stage}"
 
   kube::release::clean_cruft
 
@@ -577,7 +569,7 @@ EOF
 
   cp -R "${KUBE_ROOT}/docs" "${release_stage}/"
   cp "${KUBE_ROOT}/README.md" "${release_stage}/"
-  cp "${KUBE_ROOT}/Godeps/LICENSES" "${release_stage}/"
+  cp -R "${KUBE_ROOT}/LICENSES" "${release_stage}/"
 
   echo "${KUBE_GIT_VERSION}" > "${release_stage}/version"
 

@@ -22,179 +22,40 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestPluginsApply(t *testing.T) {
+func TestPluginsNames(t *testing.T) {
 	tests := []struct {
-		name            string
-		customPlugins   *Plugins
-		defaultPlugins  *Plugins
-		expectedPlugins *Plugins
+		name    string
+		plugins *Plugins
+		want    []string
 	}{
 		{
-			name: "AppendCustomPlugin",
-			customPlugins: &Plugins{
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "CustomPlugin"},
-					},
-				},
-			},
-			defaultPlugins: &Plugins{
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "DefaultPlugin1"},
-						{Name: "DefaultPlugin2"},
-					},
-				},
-			},
-			expectedPlugins: &Plugins{
-				QueueSort: &PluginSet{Enabled: []Plugin{}},
-				PreFilter: &PluginSet{Enabled: []Plugin{}},
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "DefaultPlugin1"},
-						{Name: "DefaultPlugin2"},
-						{Name: "CustomPlugin"},
-					},
-				},
-				PreScore:  &PluginSet{Enabled: []Plugin{}},
-				Score:     &PluginSet{Enabled: []Plugin{}},
-				Reserve:   &PluginSet{Enabled: []Plugin{}},
-				Permit:    &PluginSet{Enabled: []Plugin{}},
-				PreBind:   &PluginSet{Enabled: []Plugin{}},
-				Bind:      &PluginSet{Enabled: []Plugin{}},
-				PostBind:  &PluginSet{Enabled: []Plugin{}},
-				Unreserve: &PluginSet{Enabled: []Plugin{}},
-			},
+			name: "empty",
 		},
 		{
-			name: "InsertAfterDefaultPlugins2",
-			customPlugins: &Plugins{
-				Filter: &PluginSet{
+			name: "with duplicates",
+			plugins: &Plugins{
+				Filter: PluginSet{
 					Enabled: []Plugin{
-						{Name: "CustomPlugin"},
-						{Name: "DefaultPlugin2"},
+						{Name: "CustomFilter"},
 					},
-					Disabled: []Plugin{
-						{Name: "DefaultPlugin2"},
+				},
+				PreFilter: PluginSet{
+					Enabled: []Plugin{
+						{Name: "CustomFilter"},
+					},
+				},
+				Score: PluginSet{
+					Enabled: []Plugin{
+						{Name: "CustomScore"},
 					},
 				},
 			},
-			defaultPlugins: &Plugins{
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "DefaultPlugin1"},
-						{Name: "DefaultPlugin2"},
-					},
-				},
-			},
-			expectedPlugins: &Plugins{
-				QueueSort: &PluginSet{Enabled: []Plugin{}},
-				PreFilter: &PluginSet{Enabled: []Plugin{}},
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "DefaultPlugin1"},
-						{Name: "CustomPlugin"},
-						{Name: "DefaultPlugin2"},
-					},
-				},
-				PreScore:  &PluginSet{Enabled: []Plugin{}},
-				Score:     &PluginSet{Enabled: []Plugin{}},
-				Reserve:   &PluginSet{Enabled: []Plugin{}},
-				Permit:    &PluginSet{Enabled: []Plugin{}},
-				PreBind:   &PluginSet{Enabled: []Plugin{}},
-				Bind:      &PluginSet{Enabled: []Plugin{}},
-				PostBind:  &PluginSet{Enabled: []Plugin{}},
-				Unreserve: &PluginSet{Enabled: []Plugin{}},
-			},
-		},
-		{
-			name: "InsertBeforeAllPlugins",
-			customPlugins: &Plugins{
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "CustomPlugin"},
-						{Name: "DefaultPlugin1"},
-						{Name: "DefaultPlugin2"},
-					},
-					Disabled: []Plugin{
-						{Name: "*"},
-					},
-				},
-			},
-			defaultPlugins: &Plugins{
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "DefaultPlugin1"},
-						{Name: "DefaultPlugin2"},
-					},
-				},
-			},
-			expectedPlugins: &Plugins{
-				QueueSort: &PluginSet{Enabled: []Plugin{}},
-				PreFilter: &PluginSet{Enabled: []Plugin{}},
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "CustomPlugin"},
-						{Name: "DefaultPlugin1"},
-						{Name: "DefaultPlugin2"},
-					},
-				},
-				PreScore:  &PluginSet{Enabled: []Plugin{}},
-				Score:     &PluginSet{Enabled: []Plugin{}},
-				Reserve:   &PluginSet{Enabled: []Plugin{}},
-				Permit:    &PluginSet{Enabled: []Plugin{}},
-				PreBind:   &PluginSet{Enabled: []Plugin{}},
-				Bind:      &PluginSet{Enabled: []Plugin{}},
-				PostBind:  &PluginSet{Enabled: []Plugin{}},
-				Unreserve: &PluginSet{Enabled: []Plugin{}},
-			},
-		},
-		{
-			name: "ReorderDefaultPlugins",
-			customPlugins: &Plugins{
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "DefaultPlugin2"},
-						{Name: "DefaultPlugin1"},
-					},
-					Disabled: []Plugin{
-						{Name: "*"},
-					},
-				},
-			},
-			defaultPlugins: &Plugins{
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "DefaultPlugin1"},
-						{Name: "DefaultPlugin2"},
-					},
-				},
-			},
-			expectedPlugins: &Plugins{
-				QueueSort: &PluginSet{Enabled: []Plugin{}},
-				PreFilter: &PluginSet{Enabled: []Plugin{}},
-				Filter: &PluginSet{
-					Enabled: []Plugin{
-						{Name: "DefaultPlugin2"},
-						{Name: "DefaultPlugin1"},
-					},
-				},
-				PreScore:  &PluginSet{Enabled: []Plugin{}},
-				Score:     &PluginSet{Enabled: []Plugin{}},
-				Reserve:   &PluginSet{Enabled: []Plugin{}},
-				Permit:    &PluginSet{Enabled: []Plugin{}},
-				PreBind:   &PluginSet{Enabled: []Plugin{}},
-				Bind:      &PluginSet{Enabled: []Plugin{}},
-				PostBind:  &PluginSet{Enabled: []Plugin{}},
-				Unreserve: &PluginSet{Enabled: []Plugin{}},
-			},
+			want: []string{"CustomFilter", "CustomScore"},
 		},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			test.defaultPlugins.Apply(test.customPlugins)
-			if d := cmp.Diff(test.expectedPlugins, test.defaultPlugins); d != "" {
+			if d := cmp.Diff(test.want, test.plugins.Names()); d != "" {
 				t.Fatalf("plugins mismatch (-want +got):\n%s", d)
 			}
 		})

@@ -19,12 +19,14 @@ package nodevolumelimits
 import (
 	"strings"
 
-	v1 "k8s.io/api/core/v1"
+	"k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	csilibplugins "k8s.io/csi-translation-lib/plugins"
+	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
 	"k8s.io/kubernetes/pkg/features"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 // isCSIMigrationOn returns a boolean value indicating whether
@@ -45,6 +47,10 @@ func isCSIMigrationOn(csiNode *storagev1.CSINode, pluginName string) bool {
 		if !utilfeature.DefaultFeatureGate.Enabled(features.CSIMigrationAWS) {
 			return false
 		}
+	case csilibplugins.PortworxVolumePluginName:
+		if !utilfeature.DefaultFeatureGate.Enabled(features.CSIMigrationPortworx) {
+			return false
+		}
 	case csilibplugins.GCEPDInTreePluginName:
 		if !utilfeature.DefaultFeatureGate.Enabled(features.CSIMigrationGCE) {
 			return false
@@ -54,7 +60,9 @@ func isCSIMigrationOn(csiNode *storagev1.CSINode, pluginName string) bool {
 			return false
 		}
 	case csilibplugins.CinderInTreePluginName:
-		if !utilfeature.DefaultFeatureGate.Enabled(features.CSIMigrationOpenStack) {
+		return true
+	case csilibplugins.RBDVolumePluginName:
+		if !utilfeature.DefaultFeatureGate.Enabled(features.CSIMigrationRBD) {
 			return false
 		}
 	default:
@@ -78,4 +86,15 @@ func isCSIMigrationOn(csiNode *storagev1.CSINode, pluginName string) bool {
 	}
 
 	return mpaSet.Has(pluginName)
+}
+
+// volumeLimits returns volume limits associated with the node.
+func volumeLimits(n *framework.NodeInfo) map[v1.ResourceName]int64 {
+	volumeLimits := map[v1.ResourceName]int64{}
+	for k, v := range n.Allocatable.ScalarResources {
+		if v1helper.IsAttachableVolumeResourceName(k) {
+			volumeLimits[k] = v
+		}
+	}
+	return volumeLimits
 }

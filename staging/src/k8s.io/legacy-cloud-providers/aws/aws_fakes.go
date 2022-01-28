@@ -1,3 +1,4 @@
+//go:build !providerless
 // +build !providerless
 
 /*
@@ -29,7 +30,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/elb"
 	"github.com/aws/aws-sdk-go/service/elbv2"
 	"github.com/aws/aws-sdk-go/service/kms"
-	"k8s.io/klog"
+	_ "github.com/stretchr/testify/mock"
+	"k8s.io/klog/v2"
 )
 
 // FakeAWSServices is an fake AWS session used for testing
@@ -358,7 +360,12 @@ func (m *FakeMetadata) GetMetadata(key string) (string, error) {
 		if len(keySplit) == 5 && keySplit[4] == "device-number" {
 			for i, macElem := range m.aws.networkInterfacesMacs {
 				if macParam == macElem {
-					return fmt.Sprintf("%d\n", i), nil
+					n := i
+					if n > 0 {
+						// Introduce an artificial gap, just to test eg: [eth0, eth2]
+						n++
+					}
+					return fmt.Sprintf("%d\n", n), nil
 				}
 			}
 		}

@@ -1,3 +1,4 @@
+//go:build !providerless
 // +build !providerless
 
 /*
@@ -21,9 +22,11 @@ package ipam
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
+	netutils "k8s.io/utils/net"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,7 +34,7 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
-	nodeutil "k8s.io/kubernetes/pkg/util/node"
+	nodeutil "k8s.io/component-helpers/node/util"
 	"k8s.io/legacy-cloud-providers/gce"
 	"k8s.io/metrics/pkg/client/clientset/versioned/scheme"
 )
@@ -50,7 +53,7 @@ func newAdapter(k8s clientset.Interface, cloud *gce.Cloud) *adapter {
 	}
 
 	broadcaster := record.NewBroadcaster()
-	broadcaster.StartLogging(klog.Infof)
+	broadcaster.StartStructuredLogging(0)
 	ret.recorder = broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "cloudCIDRAllocator"})
 	klog.V(0).Infof("Sending events to api server.")
 	broadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
@@ -60,8 +63,12 @@ func newAdapter(k8s clientset.Interface, cloud *gce.Cloud) *adapter {
 	return ret
 }
 
-func (a *adapter) Alias(ctx context.Context, nodeName string) (*net.IPNet, error) {
-	cidrs, err := a.cloud.AliasRanges(types.NodeName(nodeName))
+func (a *adapter) Alias(ctx context.Context, node *v1.Node) (*net.IPNet, error) {
+	if node.Spec.ProviderID == "" {
+		return nil, fmt.Errorf("node %s doesn't have providerID", node.Name)
+	}
+
+	cidrs, err := a.cloud.AliasRangesByProviderID(node.Spec.ProviderID)
 	if err != nil {
 		return nil, err
 	}
@@ -72,10 +79,10 @@ func (a *adapter) Alias(ctx context.Context, nodeName string) (*net.IPNet, error
 	case 1:
 		break
 	default:
-		klog.Warningf("Node %q has more than one alias assigned (%v), defaulting to the first", nodeName, cidrs)
+		klog.Warningf("Node %q has more than one alias assigned (%v), defaulting to the first", node.Name, cidrs)
 	}
 
-	_, cidrRange, err := net.ParseCIDR(cidrs[0])
+	_, cidrRange, err := netutils.ParseCIDRSloppy(cidrs[0])
 	if err != nil {
 		return nil, err
 	}
@@ -83,8 +90,12 @@ func (a *adapter) Alias(ctx context.Context, nodeName string) (*net.IPNet, error
 	return cidrRange, nil
 }
 
-func (a *adapter) AddAlias(ctx context.Context, nodeName string, cidrRange *net.IPNet) error {
-	return a.cloud.AddAliasToInstance(types.NodeName(nodeName), cidrRange)
+func (a *adapter) AddAlias(ctx context.Context, node *v1.Node, cidrRange *net.IPNet) error {
+	if node.Spec.ProviderID == "" {
+		return fmt.Errorf("node %s doesn't have providerID", node.Name)
+	}
+
+	return a.cloud.AddAliasToInstanceByProviderID(node.Spec.ProviderID, cidrRange)
 }
 
 func (a *adapter) Node(ctx context.Context, name string) (*v1.Node, error) {

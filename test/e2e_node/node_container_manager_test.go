@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 /*
@@ -33,7 +34,10 @@ import (
 	kubeletconfig "k8s.io/kubernetes/pkg/kubelet/apis/config"
 	"k8s.io/kubernetes/pkg/kubelet/cm"
 	"k8s.io/kubernetes/pkg/kubelet/stats/pidlimit"
+
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
+	e2enodekubelet "k8s.io/kubernetes/test/e2e_node/kubeletconfig"
 
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
@@ -58,7 +62,7 @@ func setDesiredConfiguration(initialConfig *kubeletconfig.KubeletConfiguration) 
 	initialConfig.SystemReservedCgroup = systemReservedCgroup
 }
 
-var _ = framework.KubeDescribe("Node Container Manager [Serial]", func() {
+var _ = SIGDescribe("Node Container Manager [Serial]", func() {
 	f := framework.NewDefaultFramework("node-container-manager")
 	ginkgo.Describe("Validate Node Allocatable [NodeFeature:NodeAllocatable]", func() {
 		ginkgo.It("sets up the node and runs the test", func() {
@@ -149,6 +153,11 @@ func destroyTemporaryCgroupsForReservation(cgroupManager cm.CgroupManager) error
 	return cgroupManager.Destroy(cgroupConfig)
 }
 
+// convertSharesToWeight converts from cgroup v1 cpu.shares to cgroup v2 cpu.weight
+func convertSharesToWeight(shares int64) int64 {
+	return 1 + ((shares-2)*9999)/262142
+}
+
 func runTest(f *framework.Framework) error {
 	var oldCfg *kubeletconfig.KubeletConfiguration
 	subsystems, err := cm.GetCgroupSubsystems()
@@ -161,13 +170,39 @@ func runTest(f *framework.Framework) error {
 		return err
 	}
 
+	// Test needs to be updated to make it run properly on systemd.
+	// In its current state it will result in kubelet error since
+	// kubeReservedCgroup and systemReservedCgroup are not configured
+	// correctly for systemd.
+	// See: https://github.com/kubernetes/kubernetes/issues/102394
+	if oldCfg.CgroupDriver == "systemd" {
+		e2eskipper.Skipf("unable to run test when using systemd as cgroup driver")
+	}
+
 	// Create a cgroup manager object for manipulating cgroups.
 	cgroupManager := cm.NewCgroupManager(subsystems, oldCfg.CgroupDriver)
 
 	defer destroyTemporaryCgroupsForReservation(cgroupManager)
 	defer func() {
 		if oldCfg != nil {
-			framework.ExpectNoError(setKubeletConfiguration(f, oldCfg))
+			// Update the Kubelet configuration.
+			ginkgo.By("Stopping the kubelet")
+			startKubelet := stopKubelet()
+
+			// wait until the kubelet health check will fail
+			gomega.Eventually(func() bool {
+				return kubeletHealthCheck(kubeletHealthCheckURL)
+			}, time.Minute, time.Second).Should(gomega.BeFalse())
+
+			framework.ExpectNoError(e2enodekubelet.WriteKubeletConfigFile(oldCfg))
+
+			ginkgo.By("Starting the kubelet")
+			startKubelet()
+
+			// wait until the kubelet health check will succeed
+			gomega.Eventually(func() bool {
+				return kubeletHealthCheck(kubeletHealthCheckURL)
+			}, 2*time.Minute, 5*time.Second).Should(gomega.BeTrue())
 		}
 	}()
 	if err := createTemporaryCgroupsForReservation(cgroupManager); err != nil {
@@ -177,7 +212,25 @@ func runTest(f *framework.Framework) error {
 	// Change existing kubelet configuration
 	setDesiredConfiguration(newCfg)
 	// Set the new kubelet configuration.
-	err = setKubeletConfiguration(f, newCfg)
+	// Update the Kubelet configuration.
+	ginkgo.By("Stopping the kubelet")
+	startKubelet := stopKubelet()
+
+	// wait until the kubelet health check will fail
+	gomega.Eventually(func() bool {
+		return kubeletHealthCheck(kubeletHealthCheckURL)
+	}, time.Minute, time.Second).Should(gomega.BeFalse())
+
+	framework.ExpectNoError(e2enodekubelet.WriteKubeletConfigFile(newCfg))
+
+	ginkgo.By("Starting the kubelet")
+	startKubelet()
+
+	// wait until the kubelet health check will succeed
+	gomega.Eventually(func() bool {
+		return kubeletHealthCheck(kubeletHealthCheckURL)
+	}, 2*time.Minute, 5*time.Second).Should(gomega.BeTrue())
+
 	if err != nil {
 		return err
 	}
@@ -187,8 +240,14 @@ func runTest(f *framework.Framework) error {
 	expectedNAPodCgroup := cm.ParseCgroupfsToCgroupName(currentConfig.CgroupRoot)
 	expectedNAPodCgroup = cm.NewCgroupName(expectedNAPodCgroup, "kubepods")
 	if !cgroupManager.Exists(expectedNAPodCgroup) {
-		return fmt.Errorf("Expected Node Allocatable Cgroup Does not exist")
+		return fmt.Errorf("Expected Node Allocatable Cgroup %q does not exist", expectedNAPodCgroup)
 	}
+
+	memoryLimitFile := "memory.limit_in_bytes"
+	if IsCgroup2UnifiedMode() {
+		memoryLimitFile = "memory.max"
+	}
+
 	// TODO: Update cgroupManager to expose a Status interface to get current Cgroup Settings.
 	// The node may not have updated capacity and allocatable yet, so check that it happens eventually.
 	gomega.Eventually(func() error {
@@ -199,20 +258,33 @@ func runTest(f *framework.Framework) error {
 		if len(nodeList.Items) != 1 {
 			return fmt.Errorf("Unexpected number of node objects for node e2e. Expects only one node: %+v", nodeList)
 		}
+		cgroupName := "kubepods"
+		if currentConfig.CgroupDriver == "systemd" {
+			cgroupName = "kubepods.slice"
+		}
+
 		node := nodeList.Items[0]
 		capacity := node.Status.Capacity
 		allocatableCPU, allocatableMemory, allocatablePIDs := getAllocatableLimits("200m", "200Mi", "1738", capacity)
 		// Total Memory reservation is 200Mi excluding eviction thresholds.
 		// Expect CPU shares on node allocatable cgroup to equal allocatable.
-		if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["cpu"], "kubepods", "cpu.shares"), int64(cm.MilliCPUToShares(allocatableCPU.MilliValue())), 10); err != nil {
-			return err
+		shares := int64(cm.MilliCPUToShares(allocatableCPU.MilliValue()))
+		if IsCgroup2UnifiedMode() {
+			// convert to the cgroup v2 cpu.weight value
+			if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["cpu"], cgroupName, "cpu.weight"), convertSharesToWeight(shares), 10); err != nil {
+				return err
+			}
+		} else {
+			if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["cpu"], cgroupName, "cpu.shares"), shares, 10); err != nil {
+				return err
+			}
 		}
 		// Expect Memory limit on node allocatable cgroup to equal allocatable.
-		if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["memory"], "kubepods", "memory.limit_in_bytes"), allocatableMemory.Value(), 0); err != nil {
+		if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["memory"], cgroupName, memoryLimitFile), allocatableMemory.Value(), 0); err != nil {
 			return err
 		}
 		// Expect PID limit on node allocatable cgroup to equal allocatable.
-		if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["pids"], "kubepods", "pids.max"), allocatablePIDs.Value(), 0); err != nil {
+		if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["pids"], cgroupName, "pids.max"), allocatablePIDs.Value(), 0); err != nil {
 			return err
 		}
 
@@ -235,42 +307,61 @@ func runTest(f *framework.Framework) error {
 		return nil
 	}, time.Minute, 5*time.Second).Should(gomega.BeNil())
 
-	kubeReservedCgroupName := cm.NewCgroupName(cm.RootCgroupName, kubeReservedCgroup)
-	if !cgroupManager.Exists(kubeReservedCgroupName) {
-		return fmt.Errorf("Expected kube reserved cgroup Does not exist")
+	cgroupPath := ""
+	if currentConfig.CgroupDriver == "systemd" {
+		cgroupPath = cm.ParseSystemdToCgroupName(kubeReservedCgroup).ToSystemd()
+	} else {
+		cgroupPath = cgroupManager.Name(cm.NewCgroupName(cm.RootCgroupName, kubeReservedCgroup))
 	}
 	// Expect CPU shares on kube reserved cgroup to equal it's reservation which is `100m`.
 	kubeReservedCPU := resource.MustParse(currentConfig.KubeReserved[string(v1.ResourceCPU)])
-	if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["cpu"], cgroupManager.Name(kubeReservedCgroupName), "cpu.shares"), int64(cm.MilliCPUToShares(kubeReservedCPU.MilliValue())), 10); err != nil {
-		return err
+	shares := int64(cm.MilliCPUToShares(kubeReservedCPU.MilliValue()))
+	if IsCgroup2UnifiedMode() {
+		if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["cpu"], cgroupPath, "cpu.weight"), convertSharesToWeight(shares), 10); err != nil {
+			return err
+		}
+	} else {
+		if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["cpu"], cgroupPath, "cpu.shares"), shares, 10); err != nil {
+			return err
+		}
 	}
 	// Expect Memory limit kube reserved cgroup to equal configured value `100Mi`.
 	kubeReservedMemory := resource.MustParse(currentConfig.KubeReserved[string(v1.ResourceMemory)])
-	if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["memory"], cgroupManager.Name(kubeReservedCgroupName), "memory.limit_in_bytes"), kubeReservedMemory.Value(), 0); err != nil {
+	if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["memory"], cgroupPath, memoryLimitFile), kubeReservedMemory.Value(), 0); err != nil {
 		return err
 	}
 	// Expect process ID limit kube reserved cgroup to equal configured value `738`.
 	kubeReservedPIDs := resource.MustParse(currentConfig.KubeReserved[string(pidlimit.PIDs)])
-	if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["pids"], cgroupManager.Name(kubeReservedCgroupName), "pids.max"), kubeReservedPIDs.Value(), 0); err != nil {
+	if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["pids"], cgroupPath, "pids.max"), kubeReservedPIDs.Value(), 0); err != nil {
 		return err
 	}
-	systemReservedCgroupName := cm.NewCgroupName(cm.RootCgroupName, systemReservedCgroup)
-	if !cgroupManager.Exists(systemReservedCgroupName) {
-		return fmt.Errorf("Expected system reserved cgroup Does not exist")
+
+	if currentConfig.CgroupDriver == "systemd" {
+		cgroupPath = cm.ParseSystemdToCgroupName(systemReservedCgroup).ToSystemd()
+	} else {
+		cgroupPath = cgroupManager.Name(cm.NewCgroupName(cm.RootCgroupName, systemReservedCgroup))
 	}
+
 	// Expect CPU shares on system reserved cgroup to equal it's reservation which is `100m`.
 	systemReservedCPU := resource.MustParse(currentConfig.SystemReserved[string(v1.ResourceCPU)])
-	if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["cpu"], cgroupManager.Name(systemReservedCgroupName), "cpu.shares"), int64(cm.MilliCPUToShares(systemReservedCPU.MilliValue())), 10); err != nil {
-		return err
+	shares = int64(cm.MilliCPUToShares(systemReservedCPU.MilliValue()))
+	if IsCgroup2UnifiedMode() {
+		if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["cpu"], cgroupPath, "cpu.weight"), convertSharesToWeight(shares), 10); err != nil {
+			return err
+		}
+	} else {
+		if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["cpu"], cgroupPath, "cpu.shares"), shares, 10); err != nil {
+			return err
+		}
 	}
 	// Expect Memory limit on node allocatable cgroup to equal allocatable.
 	systemReservedMemory := resource.MustParse(currentConfig.SystemReserved[string(v1.ResourceMemory)])
-	if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["memory"], cgroupManager.Name(systemReservedCgroupName), "memory.limit_in_bytes"), systemReservedMemory.Value(), 0); err != nil {
+	if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["memory"], cgroupPath, memoryLimitFile), systemReservedMemory.Value(), 0); err != nil {
 		return err
 	}
 	// Expect process ID limit system reserved cgroup to equal configured value `1000`.
 	systemReservedPIDs := resource.MustParse(currentConfig.SystemReserved[string(pidlimit.PIDs)])
-	if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["pids"], cgroupManager.Name(systemReservedCgroupName), "pids.max"), systemReservedPIDs.Value(), 0); err != nil {
+	if err := expectFileValToEqual(filepath.Join(subsystems.MountPoints["pids"], cgroupPath, "pids.max"), systemReservedPIDs.Value(), 0); err != nil {
 		return err
 	}
 	return nil

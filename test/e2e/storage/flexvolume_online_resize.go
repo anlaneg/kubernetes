@@ -79,6 +79,7 @@ var _ = utils.SIGDescribe("Mounted flexvolume volume expand [Slow] [Feature:Expa
 
 		test := testsuites.StorageClassTest{
 			Name:                 "flexvolume-resize",
+			Timeouts:             f.Timeouts,
 			ClaimSize:            "2Gi",
 			AllowVolumeExpansion: true,
 			Provisioner:          "flex-expand",
@@ -139,7 +140,7 @@ var _ = utils.SIGDescribe("Mounted flexvolume volume expand [Slow] [Feature:Expa
 			VolumeMode:       pvc.Spec.VolumeMode,
 		})
 
-		_, err = e2epv.CreatePV(c, pv)
+		_, err = e2epv.CreatePV(c, f.Timeouts, pv)
 		framework.ExpectNoError(err, "Error creating pv %v", err)
 
 		ginkgo.By("Waiting for PVC to be in bound phase")
@@ -157,7 +158,7 @@ var _ = utils.SIGDescribe("Mounted flexvolume volume expand [Slow] [Feature:Expa
 		defer e2epod.DeletePodWithWait(c, pod)
 
 		ginkgo.By("Waiting for pod to go to 'running' state")
-		err = f.WaitForPodRunning(pod.ObjectMeta.Name)
+		err = e2epod.WaitForPodNameRunningInNamespace(f.ClientSet, pod.ObjectMeta.Name, f.Namespace.Name)
 		framework.ExpectNoError(err, "Pod didn't go to 'running' state %v", err)
 
 		ginkgo.By("Expanding current pvc")

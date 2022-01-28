@@ -17,11 +17,10 @@ limitations under the License.
 package queuesort
 
 import (
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"testing"
 	"time"
-
-	v1 "k8s.io/api/core/v1"
-	framework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 )
 
 func TestLess(t *testing.T) {
@@ -31,82 +30,82 @@ func TestLess(t *testing.T) {
 	t2 := t1.Add(time.Second)
 	for _, tt := range []struct {
 		name     string
-		p1       *framework.PodInfo
-		p2       *framework.PodInfo
+		p1       *framework.QueuedPodInfo
+		p2       *framework.QueuedPodInfo
 		expected bool
 	}{
 		{
 			name: "p1.priority less than p2.priority",
-			p1: &framework.PodInfo{
-				Pod: &v1.Pod{
+			p1: &framework.QueuedPodInfo{
+				PodInfo: framework.NewPodInfo(&v1.Pod{
 					Spec: v1.PodSpec{
 						Priority: &lowPriority,
 					},
-				},
+				}),
 			},
-			p2: &framework.PodInfo{
-				Pod: &v1.Pod{
+			p2: &framework.QueuedPodInfo{
+				PodInfo: framework.NewPodInfo(&v1.Pod{
 					Spec: v1.PodSpec{
 						Priority: &highPriority,
 					},
-				},
+				}),
 			},
 			expected: false, // p2 should be ahead of p1 in the queue
 		},
 		{
 			name: "p1.priority greater than p2.priority",
-			p1: &framework.PodInfo{
-				Pod: &v1.Pod{
+			p1: &framework.QueuedPodInfo{
+				PodInfo: framework.NewPodInfo(&v1.Pod{
 					Spec: v1.PodSpec{
 						Priority: &highPriority,
 					},
-				},
+				}),
 			},
-			p2: &framework.PodInfo{
-				Pod: &v1.Pod{
+			p2: &framework.QueuedPodInfo{
+				PodInfo: framework.NewPodInfo(&v1.Pod{
 					Spec: v1.PodSpec{
 						Priority: &lowPriority,
 					},
-				},
+				}),
 			},
 			expected: true, // p1 should be ahead of p2 in the queue
 		},
 		{
 			name: "equal priority. p1 is added to schedulingQ earlier than p2",
-			p1: &framework.PodInfo{
-				Pod: &v1.Pod{
+			p1: &framework.QueuedPodInfo{
+				PodInfo: framework.NewPodInfo(&v1.Pod{
 					Spec: v1.PodSpec{
 						Priority: &highPriority,
 					},
-				},
+				}),
 				Timestamp: t1,
 			},
-			p2: &framework.PodInfo{
-				Pod: &v1.Pod{
+			p2: &framework.QueuedPodInfo{
+				PodInfo: framework.NewPodInfo(&v1.Pod{
 					Spec: v1.PodSpec{
 						Priority: &highPriority,
 					},
-				},
+				}),
 				Timestamp: t2,
 			},
 			expected: true, // p1 should be ahead of p2 in the queue
 		},
 		{
 			name: "equal priority. p2 is added to schedulingQ earlier than p1",
-			p1: &framework.PodInfo{
-				Pod: &v1.Pod{
+			p1: &framework.QueuedPodInfo{
+				PodInfo: framework.NewPodInfo(&v1.Pod{
 					Spec: v1.PodSpec{
 						Priority: &highPriority,
 					},
-				},
+				}),
 				Timestamp: t2,
 			},
-			p2: &framework.PodInfo{
-				Pod: &v1.Pod{
+			p2: &framework.QueuedPodInfo{
+				PodInfo: framework.NewPodInfo(&v1.Pod{
 					Spec: v1.PodSpec{
 						Priority: &highPriority,
 					},
-				},
+				}),
 				Timestamp: t1,
 			},
 			expected: false, // p2 should be ahead of p1 in the queue

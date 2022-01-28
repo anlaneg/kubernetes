@@ -45,7 +45,13 @@ func makePodToVerifyPids(baseName string, pidsLimit resource.Quantity) *v1.Pod {
 	}
 
 	// this command takes the expected value and compares it against the actual value for the pod cgroup pids.max
-	command := fmt.Sprintf("expected=%v; actual=$(cat /tmp/pids/%v/pids.max); if [ \"$expected\" -ne \"$actual\" ]; then exit 1; fi; ", pidsLimit.Value(), cgroupFsName)
+	command := ""
+	if IsCgroup2UnifiedMode() {
+		command = fmt.Sprintf("expected=%v; actual=$(cat /tmp/%v/pids.max); if [ \"$expected\" -ne \"$actual\" ]; then exit 1; fi; ", pidsLimit.Value(), cgroupFsName)
+	} else {
+		command = fmt.Sprintf("expected=%v; actual=$(cat /tmp/pids/%v/pids.max); if [ \"$expected\" -ne \"$actual\" ]; then exit 1; fi; ", pidsLimit.Value(), cgroupFsName)
+	}
+
 	framework.Logf("Pod to run command: %v", command)
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -112,14 +118,10 @@ func runPodPidsLimitTests(f *framework.Framework) {
 }
 
 // Serial because the test updates kubelet configuration.
-var _ = SIGDescribe("PodPidsLimit [Serial] [Feature:SupportPodPidsLimit][NodeFeature:SupportPodPidsLimit]", func() {
+var _ = SIGDescribe("PodPidsLimit [Serial]", func() {
 	f := framework.NewDefaultFramework("pids-limit-test")
-	ginkgo.Context("With config updated with pids feature enabled", func() {
+	ginkgo.Context("With config updated with pids limits", func() {
 		tempSetCurrentKubeletConfig(f, func(initialConfig *kubeletconfig.KubeletConfiguration) {
-			if initialConfig.FeatureGates == nil {
-				initialConfig.FeatureGates = make(map[string]bool)
-			}
-			initialConfig.FeatureGates["SupportPodPidsLimit"] = true
 			initialConfig.PodPidsLimit = int64(1024)
 		})
 		runPodPidsLimitTests(f)

@@ -1,3 +1,4 @@
+//go:build !providerless
 // +build !providerless
 
 /*
@@ -26,7 +27,7 @@ import (
 	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/servers"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	"k8s.io/apimachinery/pkg/types"
 	cloudprovider "k8s.io/cloud-provider"
@@ -60,6 +61,12 @@ func (os *OpenStack) Instances() (cloudprovider.Instances, bool) {
 		compute: compute,
 		opts:    os.metadataOpts,
 	}, true
+}
+
+// InstancesV2 returns an implementation of InstancesV2 for OpenStack.
+// TODO: implement ONLY for external cloud provider
+func (os *OpenStack) InstancesV2() (cloudprovider.InstancesV2, bool) {
+	return nil, false
 }
 
 // CurrentNodeName implements Instances.CurrentNodeName

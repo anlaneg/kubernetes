@@ -20,10 +20,11 @@ import (
 	"github.com/pkg/errors"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
+	"sigs.k8s.io/yaml"
+
 	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/scheme"
 	"k8s.io/kubernetes/cmd/kubeadm/app/componentconfigs"
-	"sigs.k8s.io/yaml"
 )
 
 // VerifyUnmarshalStrict takes a YAML byte slice and a GroupVersionKind and verifies if the YAML

@@ -19,6 +19,7 @@ package rollout
 import (
 	"github.com/lithammer/dedent"
 	"github.com/spf13/cobra"
+
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 	"k8s.io/kubectl/pkg/util/i18n"
@@ -26,15 +27,21 @@ import (
 )
 
 var (
-	rolloutLong = templates.LongDesc(`
-		Manage the rollout of a resource.` + rolloutValidResources)
+	rolloutLong = templates.LongDesc(i18n.T(`
+		Manage the rollout of one or many resources.`) + rolloutValidResources)
 
 	rolloutExample = templates.Examples(`
 		# Rollback to the previous deployment
 		kubectl rollout undo deployment/abc
 
 		# Check the rollout status of a daemonset
-		kubectl rollout status daemonset/foo`)
+		kubectl rollout status daemonset/foo
+
+		# Restart a deployment
+		kubectl rollout restart deployment/abc
+
+		# Restart deployments with the app=nginx label
+		kubectl rollout restart deployment --selector=app=nginx`)
 
 	rolloutValidResources = dedent.Dedent(`
 		Valid resource types include:

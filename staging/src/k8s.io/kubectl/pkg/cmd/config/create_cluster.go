@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -40,26 +41,30 @@ type createClusterOptions struct {
 	insecureSkipTLSVerify cliflag.Tristate
 	certificateAuthority  cliflag.StringFlag
 	embedCAData           cliflag.Tristate
+	proxyURL              cliflag.StringFlag
 }
 
 var (
-	createClusterLong = templates.LongDesc(`
-		Sets a cluster entry in kubeconfig.
+	createClusterLong = templates.LongDesc(i18n.T(`
+		Set a cluster entry in kubeconfig.
 
-		Specifying a name that already exists will merge new fields on top of existing values for those fields.`)
+		Specifying a name that already exists will merge new fields on top of existing values for those fields.`))
 
 	createClusterExample = templates.Examples(`
-		# Set only the server field on the e2e cluster entry without touching other values.
+		# Set only the server field on the e2e cluster entry without touching other values
 		kubectl config set-cluster e2e --server=https://1.2.3.4
 
 		# Embed certificate authority data for the e2e cluster entry
-		kubectl config set-cluster e2e --certificate-authority=~/.kube/e2e/kubernetes.ca.crt
+		kubectl config set-cluster e2e --embed-certs --certificate-authority=~/.kube/e2e/kubernetes.ca.crt
 
 		# Disable cert checking for the dev cluster entry
 		kubectl config set-cluster e2e --insecure-skip-tls-verify=true
 
 		# Set custom TLS server name to use for validation for the e2e cluster entry
-		kubectl config set-cluster e2e --tls-server-name=my-cluster-name`)
+		kubectl config set-cluster e2e --tls-server-name=my-cluster-name
+
+		# Set proxy url for the e2e cluster entry
+		kubectl config set-cluster e2e --proxy-url=https://1.2.3.4`)
 )
 
 // NewCmdConfigSetCluster returns a Command instance for 'config set-cluster' sub command
@@ -69,7 +74,7 @@ func NewCmdConfigSetCluster(out io.Writer, configAccess clientcmd.ConfigAccess) 
 	cmd := &cobra.Command{
 		Use:                   fmt.Sprintf("set-cluster NAME [--%v=server] [--%v=path/to/certificate/authority] [--%v=true] [--%v=example.com]", clientcmd.FlagAPIServer, clientcmd.FlagCAFile, clientcmd.FlagInsecure, clientcmd.FlagTLSServerName),
 		DisableFlagsInUseLine: true,
-		Short:                 i18n.T("Sets a cluster entry in kubeconfig"),
+		Short:                 i18n.T("Set a cluster entry in kubeconfig"),
 		Long:                  createClusterLong,
 		Example:               createClusterExample,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -89,6 +94,7 @@ func NewCmdConfigSetCluster(out io.Writer, configAccess clientcmd.ConfigAccess) 
 	cmd.MarkFlagFilename(clientcmd.FlagCAFile)
 	f = cmd.Flags().VarPF(&options.embedCAData, clientcmd.FlagEmbedCerts, "", clientcmd.FlagEmbedCerts+" for the cluster entry in kubeconfig")
 	f.NoOptDefVal = "true"
+	cmd.Flags().Var(&options.proxyURL, clientcmd.FlagProxyURL, clientcmd.FlagProxyURL+" for the cluster entry in kubeconfig")
 
 	return cmd
 }
@@ -156,6 +162,10 @@ func (o *createClusterOptions) modifyCluster(existingCluster clientcmdapi.Cluste
 		}
 	}
 
+	if o.proxyURL.Provided() {
+		modifiedCluster.ProxyURL = o.proxyURL.Value()
+	}
+
 	return modifiedCluster
 }
 
@@ -181,8 +191,8 @@ func (o createClusterOptions) validate() error {
 		if caPath == "" {
 			return fmt.Errorf("you must specify a --%s to embed", clientcmd.FlagCAFile)
 		}
-		if _, err := ioutil.ReadFile(caPath); err != nil {
-			return fmt.Errorf("could not read %s data from %s: %v", clientcmd.FlagCAFile, caPath, err)
+		if _, err := os.Stat(caPath); err != nil {
+			return fmt.Errorf("could not stat %s file %s: %v", clientcmd.FlagCAFile, caPath, err)
 		}
 	}
 

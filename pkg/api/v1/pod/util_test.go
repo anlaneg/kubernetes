@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -202,68 +203,23 @@ func TestFindPort(t *testing.T) {
 }
 
 func TestVisitContainers(t *testing.T) {
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.EphemeralContainers, true)()
-
+	setAllFeatureEnabledContainersDuringTest := ContainerType(0)
 	testCases := []struct {
-		description string
-		haveSpec    *v1.PodSpec
-		wantNames   []string
+		desc                       string
+		spec                       *v1.PodSpec
+		wantContainers             []string
+		mask                       ContainerType
+		ephemeralContainersEnabled bool
 	}{
 		{
-			"empty podspec",
-			&v1.PodSpec{},
-			[]string{},
+			desc:           "empty podspec",
+			spec:           &v1.PodSpec{},
+			wantContainers: []string{},
+			mask:           AllContainers,
 		},
 		{
-			"regular containers",
-			&v1.PodSpec{
-				Containers: []v1.Container{
-					{Name: "c1"},
-					{Name: "c2"},
-				},
-			},
-			[]string{"c1", "c2"},
-		},
-		{
-			"init containers",
-			&v1.PodSpec{
-				InitContainers: []v1.Container{
-					{Name: "i1"},
-					{Name: "i2"},
-				},
-			},
-			[]string{"i1", "i2"},
-		},
-		{
-			"regular and init containers",
-			&v1.PodSpec{
-				Containers: []v1.Container{
-					{Name: "c1"},
-					{Name: "c2"},
-				},
-				InitContainers: []v1.Container{
-					{Name: "i1"},
-					{Name: "i2"},
-				},
-			},
-			[]string{"i1", "i2", "c1", "c2"},
-		},
-		{
-			"ephemeral containers",
-			&v1.PodSpec{
-				Containers: []v1.Container{
-					{Name: "c1"},
-					{Name: "c2"},
-				},
-				EphemeralContainers: []v1.EphemeralContainer{
-					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e1"}},
-				},
-			},
-			[]string{"c1", "c2", "e1"},
-		},
-		{
-			"all container types",
-			&v1.PodSpec{
+			desc: "regular containers",
+			spec: &v1.PodSpec{
 				Containers: []v1.Container{
 					{Name: "c1"},
 					{Name: "c2"},
@@ -277,11 +233,108 @@ func TestVisitContainers(t *testing.T) {
 					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e2"}},
 				},
 			},
-			[]string{"i1", "i2", "c1", "c2", "e1", "e2"},
+			wantContainers: []string{"c1", "c2"},
+			mask:           Containers,
 		},
 		{
-			"dropping fields",
-			&v1.PodSpec{
+			desc: "init containers",
+			spec: &v1.PodSpec{
+				Containers: []v1.Container{
+					{Name: "c1"},
+					{Name: "c2"},
+				},
+				InitContainers: []v1.Container{
+					{Name: "i1"},
+					{Name: "i2"},
+				},
+				EphemeralContainers: []v1.EphemeralContainer{
+					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e1"}},
+					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e2"}},
+				},
+			},
+			wantContainers: []string{"i1", "i2"},
+			mask:           InitContainers,
+		},
+		{
+			desc: "ephemeral containers",
+			spec: &v1.PodSpec{
+				Containers: []v1.Container{
+					{Name: "c1"},
+					{Name: "c2"},
+				},
+				InitContainers: []v1.Container{
+					{Name: "i1"},
+					{Name: "i2"},
+				},
+				EphemeralContainers: []v1.EphemeralContainer{
+					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e1"}},
+					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e2"}},
+				},
+			},
+			wantContainers: []string{"e1", "e2"},
+			mask:           EphemeralContainers,
+		},
+		{
+			desc: "all container types",
+			spec: &v1.PodSpec{
+				Containers: []v1.Container{
+					{Name: "c1"},
+					{Name: "c2"},
+				},
+				InitContainers: []v1.Container{
+					{Name: "i1"},
+					{Name: "i2"},
+				},
+				EphemeralContainers: []v1.EphemeralContainer{
+					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e1"}},
+					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e2"}},
+				},
+			},
+			wantContainers: []string{"i1", "i2", "c1", "c2", "e1", "e2"},
+			mask:           AllContainers,
+		},
+		{
+			desc: "all feature enabled container types with ephemeral containers disabled",
+			spec: &v1.PodSpec{
+				Containers: []v1.Container{
+					{Name: "c1"},
+					{Name: "c2"},
+				},
+				InitContainers: []v1.Container{
+					{Name: "i1"},
+					{Name: "i2"},
+				},
+				EphemeralContainers: []v1.EphemeralContainer{
+					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e1"}},
+					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e2"}},
+				},
+			},
+			wantContainers: []string{"i1", "i2", "c1", "c2"},
+			mask:           setAllFeatureEnabledContainersDuringTest,
+		},
+		{
+			desc: "all feature enabled container types with ephemeral containers enabled",
+			spec: &v1.PodSpec{
+				Containers: []v1.Container{
+					{Name: "c1"},
+					{Name: "c2", SecurityContext: &v1.SecurityContext{}},
+				},
+				InitContainers: []v1.Container{
+					{Name: "i1"},
+					{Name: "i2", SecurityContext: &v1.SecurityContext{}},
+				},
+				EphemeralContainers: []v1.EphemeralContainer{
+					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e1"}},
+					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e2"}},
+				},
+			},
+			wantContainers:             []string{"i1", "i2", "c1", "c2", "e1", "e2"},
+			mask:                       setAllFeatureEnabledContainersDuringTest,
+			ephemeralContainersEnabled: true,
+		},
+		{
+			desc: "dropping fields",
+			spec: &v1.PodSpec{
 				Containers: []v1.Container{
 					{Name: "c1"},
 					{Name: "c2", SecurityContext: &v1.SecurityContext{}},
@@ -295,37 +348,46 @@ func TestVisitContainers(t *testing.T) {
 					{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "e2", SecurityContext: &v1.SecurityContext{}}},
 				},
 			},
-			[]string{"i1", "i2", "c1", "c2", "e1", "e2"},
+			wantContainers: []string{"i1", "i2", "c1", "c2", "e1", "e2"},
+			mask:           AllContainers,
 		},
 	}
 
 	for _, tc := range testCases {
-		gotNames := []string{}
-		VisitContainers(tc.haveSpec, func(c *v1.Container) bool {
-			gotNames = append(gotNames, c.Name)
-			if c.SecurityContext != nil {
-				c.SecurityContext = nil
+		t.Run(tc.desc, func(t *testing.T) {
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.EphemeralContainers, tc.ephemeralContainersEnabled)()
+
+			if tc.mask == setAllFeatureEnabledContainersDuringTest {
+				tc.mask = AllFeatureEnabledContainers()
 			}
-			return true
+
+			gotContainers := []string{}
+			VisitContainers(tc.spec, tc.mask, func(c *v1.Container, containerType ContainerType) bool {
+				gotContainers = append(gotContainers, c.Name)
+				if c.SecurityContext != nil {
+					c.SecurityContext = nil
+				}
+				return true
+			})
+			if !cmp.Equal(gotContainers, tc.wantContainers) {
+				t.Errorf("VisitContainers() = %+v, want %+v", gotContainers, tc.wantContainers)
+			}
+			for _, c := range tc.spec.Containers {
+				if c.SecurityContext != nil {
+					t.Errorf("VisitContainers() did not drop SecurityContext for container %q", c.Name)
+				}
+			}
+			for _, c := range tc.spec.InitContainers {
+				if c.SecurityContext != nil {
+					t.Errorf("VisitContainers() did not drop SecurityContext for init container %q", c.Name)
+				}
+			}
+			for _, c := range tc.spec.EphemeralContainers {
+				if c.SecurityContext != nil {
+					t.Errorf("VisitContainers() did not drop SecurityContext for ephemeral container %q", c.Name)
+				}
+			}
 		})
-		if !reflect.DeepEqual(gotNames, tc.wantNames) {
-			t.Errorf("VisitContainers() for test case %q visited containers %q, wanted to visit %q", tc.description, gotNames, tc.wantNames)
-		}
-		for _, c := range tc.haveSpec.Containers {
-			if c.SecurityContext != nil {
-				t.Errorf("VisitContainers() for test case %q: got SecurityContext %#v for container %v, wanted nil", tc.description, c.SecurityContext, c.Name)
-			}
-		}
-		for _, c := range tc.haveSpec.InitContainers {
-			if c.SecurityContext != nil {
-				t.Errorf("VisitContainers() for test case %q: got SecurityContext %#v for init container %v, wanted nil", tc.description, c.SecurityContext, c.Name)
-			}
-		}
-		for _, c := range tc.haveSpec.EphemeralContainers {
-			if c.SecurityContext != nil {
-				t.Errorf("VisitContainers() for test case %q: got SecurityContext %#v for ephemeral container %v, wanted nil", tc.description, c.SecurityContext, c.Name)
-			}
-		}
 	}
 }
 
@@ -471,6 +533,21 @@ func TestPodSecrets(t *testing.T) {
 		t.Logf("Extra secret names:\n%s", strings.Join(extraNames.List(), "\n"))
 		t.Error("Extra secret names extracted. Verify VisitPodSecretNames() is correctly extracting secret names")
 	}
+
+	// emptyPod is a stub containing empty object names
+	emptyPod := &v1.Pod{
+		Spec: v1.PodSpec{
+			Containers: []v1.Container{{
+				EnvFrom: []v1.EnvFromSource{{
+					SecretRef: &v1.SecretEnvSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: ""}}}}}},
+		},
+	}
+	VisitPodSecretNames(emptyPod, func(name string) bool {
+		t.Fatalf("expected no empty names collected, got %q", name)
+		return false
+	})
 }
 
 // collectResourcePaths traverses the object, computing all the struct paths that lead to fields with resourcename in the name.
@@ -600,6 +677,21 @@ func TestPodConfigmaps(t *testing.T) {
 		t.Logf("Extra names:\n%s", strings.Join(extraNames.List(), "\n"))
 		t.Error("Extra names extracted. Verify VisitPodConfigmapNames() is correctly extracting resource names")
 	}
+
+	// emptyPod is a stub containing empty object names
+	emptyPod := &v1.Pod{
+		Spec: v1.PodSpec{
+			Containers: []v1.Container{{
+				EnvFrom: []v1.EnvFromSource{{
+					ConfigMapRef: &v1.ConfigMapEnvSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: ""}}}}}},
+		},
+	}
+	VisitPodConfigmapNames(emptyPod, func(name string) bool {
+		t.Fatalf("expected no empty names collected, got %q", name)
+		return false
+	})
 }
 
 func newPod(now metav1.Time, ready bool, beforeSec int) *v1.Pod {
@@ -768,41 +860,5 @@ func TestUpdatePodCondition(t *testing.T) {
 		resultStatus := UpdatePodCondition(test.status, &test.conditions)
 
 		assert.Equal(t, test.expected, resultStatus, test.desc)
-	}
-}
-
-// TestGetPodPriority tests GetPodPriority function.
-func TestGetPodPriority(t *testing.T) {
-	p := int32(20)
-	tests := []struct {
-		name             string
-		pod              *v1.Pod
-		expectedPriority int32
-	}{
-		{
-			name: "no priority pod resolves to static default priority",
-			pod: &v1.Pod{
-				Spec: v1.PodSpec{Containers: []v1.Container{
-					{Name: "container", Image: "image"}},
-				},
-			},
-			expectedPriority: 0,
-		},
-		{
-			name: "pod with priority resolves correctly",
-			pod: &v1.Pod{
-				Spec: v1.PodSpec{Containers: []v1.Container{
-					{Name: "container", Image: "image"}},
-					Priority: &p,
-				},
-			},
-			expectedPriority: p,
-		},
-	}
-	for _, test := range tests {
-		if GetPodPriority(test.pod) != test.expectedPriority {
-			t.Errorf("expected pod priority: %v, got %v", test.expectedPriority, GetPodPriority(test.pod))
-		}
-
 	}
 }

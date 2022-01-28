@@ -34,7 +34,7 @@ import (
 	"k8s.io/client-go/informers"
 	corev1lister "k8s.io/client-go/listers/core/v1"
 	"k8s.io/component-base/featuregate"
-	"k8s.io/klog"
+	kubeletapis "k8s.io/kubelet/pkg/apis"
 	podutil "k8s.io/kubernetes/pkg/api/pod"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
 	coordapi "k8s.io/kubernetes/pkg/apis/coordination"
@@ -43,7 +43,6 @@ import (
 	storage "k8s.io/kubernetes/pkg/apis/storage"
 	"k8s.io/kubernetes/pkg/auth/nodeidentifier"
 	"k8s.io/kubernetes/pkg/features"
-	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 )
 
 // PluginName is a string with the name of the plugin
@@ -72,9 +71,8 @@ type Plugin struct {
 	podsGetter     corev1lister.PodLister
 	nodesGetter    corev1lister.NodeLister
 
-	tokenRequestEnabled            bool
-	csiNodeInfoEnabled             bool
 	expandPersistentVolumesEnabled bool
+	expansionRecoveryEnabled       bool
 }
 
 var (
@@ -85,9 +83,8 @@ var (
 
 // InspectFeatureGates allows setting bools without taking a dep on a global variable
 func (p *Plugin) InspectFeatureGates(featureGates featuregate.FeatureGate) {
-	p.tokenRequestEnabled = featureGates.Enabled(features.TokenRequest)
-	p.csiNodeInfoEnabled = featureGates.Enabled(features.CSINodeInfo)
 	p.expandPersistentVolumesEnabled = featureGates.Enabled(features.ExpandPersistentVolumes)
+	p.expansionRecoveryEnabled = featureGates.Enabled(features.RecoverVolumeExpansionFailure)
 }
 
 // SetExternalKubeInformerFactory registers an informer factory into Plugin
@@ -160,19 +157,13 @@ func (p *Plugin) Admit(ctx context.Context, a admission.Attributes, o admission.
 		}
 
 	case svcacctResource:
-		if p.tokenRequestEnabled {
-			return p.admitServiceAccount(nodeName, a)
-		}
-		return nil
+		return p.admitServiceAccount(nodeName, a)
 
 	case leaseResource:
 		return p.admitLease(nodeName, a)
 
 	case csiNodeResource:
-		if p.csiNodeInfoEnabled {
-			return p.admitCSINode(nodeName, a)
-		}
-		return admission.NewForbidden(a, fmt.Errorf("disabled by feature gates %s", features.CSINodeInfo))
+		return p.admitCSINode(nodeName, a)
 
 	default:
 		return nil
@@ -225,6 +216,9 @@ func (p *Plugin) admitPodCreate(nodeName string, a admission.Attributes) error {
 	if len(pod.OwnerReferences) > 1 {
 		return admission.NewForbidden(a, fmt.Errorf("node %q can only create pods with a single owner reference set to itself", nodeName))
 	}
+	if len(pod.OwnerReferences) == 0 {
+		return admission.NewForbidden(a, fmt.Errorf("node %q can only create pods with an owner reference set to itself", nodeName))
+	}
 	if len(pod.OwnerReferences) == 1 {
 		owner := pod.OwnerReferences[0]
 		if owner.APIVersion != v1.SchemeGroupVersion.String() ||
@@ -257,12 +251,12 @@ func (p *Plugin) admitPodCreate(nodeName string, a admission.Attributes) error {
 		return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference a service account", nodeName))
 	}
 	hasSecrets := false
-	podutil.VisitPodSecretNames(pod, func(name string) (shouldContinue bool) { hasSecrets = true; return false })
+	podutil.VisitPodSecretNames(pod, func(name string) (shouldContinue bool) { hasSecrets = true; return false }, podutil.AllContainers)
 	if hasSecrets {
 		return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference secrets", nodeName))
 	}
 	hasConfigMaps := false
-	podutil.VisitPodConfigmapNames(pod, func(name string) (shouldContinue bool) { hasConfigMaps = true; return false })
+	podutil.VisitPodConfigmapNames(pod, func(name string) (shouldContinue bool) { hasConfigMaps = true; return false }, podutil.AllContainers)
 	if hasConfigMaps {
 		return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference configmaps", nodeName))
 	}
@@ -371,6 +365,14 @@ func (p *Plugin) admitPVCStatus(nodeName string, a admission.Attributes) error {
 		oldPVC.Status.Conditions = nil
 		newPVC.Status.Conditions = nil
 
+		if p.expansionRecoveryEnabled {
+			oldPVC.Status.ResizeStatus = nil
+			newPVC.Status.ResizeStatus = nil
+
+			oldPVC.Status.AllocatedResources = nil
+			newPVC.Status.AllocatedResources = nil
+		}
+
 		// TODO(apelisse): We don't have a good mechanism to
 		// verify that only the things that should have changed
 		// have changed. Ignore it for now.
@@ -391,6 +393,11 @@ func (p *Plugin) admitPVCStatus(nodeName string, a admission.Attributes) error {
 
 func (p *Plugin) admitNode(nodeName string, a admission.Attributes) error {
 	requestedName := a.GetName()
+
+	if requestedName != nodeName {
+		return admission.NewForbidden(a, fmt.Errorf("node %q is not allowed to modify node %q", nodeName, requestedName))
+	}
+
 	if a.GetOperation() == admission.Create {
 		node, ok := a.GetObject().(*api.Node)
 		if !ok {
@@ -406,17 +413,9 @@ func (p *Plugin) admitNode(nodeName string, a admission.Attributes) error {
 		// Don't allow a node to register with labels outside the allowed set.
 		// This would allow a node to add or modify its labels in a way that would let it steer privileged workloads to itself.
 		modifiedLabels := getModifiedLabels(node.Labels, nil)
-		if forbiddenLabels := p.getForbiddenCreateLabels(modifiedLabels); len(forbiddenLabels) > 0 {
+		if forbiddenLabels := p.getForbiddenLabels(modifiedLabels); len(forbiddenLabels) > 0 {
 			return admission.NewForbidden(a, fmt.Errorf("node %q is not allowed to set the following labels: %s", nodeName, strings.Join(forbiddenLabels.List(), ", ")))
 		}
-		// check and warn if nodes set labels on create that would have been forbidden on update
-		// TODO(liggitt): in 1.19, expand getForbiddenCreateLabels to match getForbiddenUpdateLabels and drop this
-		if forbiddenUpdateLabels := p.getForbiddenUpdateLabels(modifiedLabels); len(forbiddenUpdateLabels) > 0 {
-			klog.Warningf("node %q added disallowed labels on node creation: %s", nodeName, strings.Join(forbiddenUpdateLabels.List(), ", "))
-		}
-	}
-	if requestedName != nodeName {
-		return admission.NewForbidden(a, fmt.Errorf("node %q is not allowed to modify node %q", nodeName, requestedName))
 	}
 
 	if a.GetOperation() == admission.Update {
@@ -445,7 +444,7 @@ func (p *Plugin) admitNode(nodeName string, a admission.Attributes) error {
 		// Don't allow a node to update labels outside the allowed set.
 		// This would allow a node to add or modify its labels in a way that would let it steer privileged workloads to itself.
 		modifiedLabels := getModifiedLabels(node.Labels, oldNode.Labels)
-		if forbiddenUpdateLabels := p.getForbiddenUpdateLabels(modifiedLabels); len(forbiddenUpdateLabels) > 0 {
+		if forbiddenUpdateLabels := p.getForbiddenLabels(modifiedLabels); len(forbiddenUpdateLabels) > 0 {
 			return admission.NewForbidden(a, fmt.Errorf("is not allowed to modify labels: %s", strings.Join(forbiddenUpdateLabels.List(), ", ")))
 		}
 	}
@@ -487,26 +486,8 @@ func getLabelNamespace(key string) string {
 	return ""
 }
 
-// getForbiddenCreateLabels returns the set of labels that may not be set by the node.
-// TODO(liggitt): in 1.19, expand to match getForbiddenUpdateLabels()
-func (p *Plugin) getForbiddenCreateLabels(modifiedLabels sets.String) sets.String {
-	if len(modifiedLabels) == 0 {
-		return nil
-	}
-
-	forbiddenLabels := sets.NewString()
-	for label := range modifiedLabels {
-		namespace := getLabelNamespace(label)
-		// forbid kubelets from setting node-restriction labels
-		if namespace == v1.LabelNamespaceNodeRestriction || strings.HasSuffix(namespace, "."+v1.LabelNamespaceNodeRestriction) {
-			forbiddenLabels.Insert(label)
-		}
-	}
-	return forbiddenLabels
-}
-
-// getForbiddenLabels returns the set of labels that may not be set by the node on update.
-func (p *Plugin) getForbiddenUpdateLabels(modifiedLabels sets.String) sets.String {
+// getForbiddenLabels returns the set of labels that may not be added, removed, or modified by the node on create or update.
+func (p *Plugin) getForbiddenLabels(modifiedLabels sets.String) sets.String {
 	if len(modifiedLabels) == 0 {
 		return nil
 	}
@@ -559,7 +540,7 @@ func (p *Plugin) admitServiceAccount(nodeName string, a admission.Attributes) er
 		return admission.NewForbidden(a, err)
 	}
 	if ref.UID != pod.UID {
-		return admission.NewForbidden(a, fmt.Errorf("the UID in the bound object reference (%s) does not match the UID in record (%s). The object might have been deleted and then recreated", ref.UID, pod.UID))
+		return admission.NewForbidden(a, fmt.Errorf("the UID in the bound object reference (%s) does not match the UID in record. The object might have been deleted and then recreated", ref.UID))
 	}
 	if pod.Spec.NodeName != nodeName {
 		return admission.NewForbidden(a, fmt.Errorf("node requested token bound to a pod scheduled on a different node"))

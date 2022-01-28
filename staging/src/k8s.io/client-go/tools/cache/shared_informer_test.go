@@ -18,17 +18,18 @@ package cache
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	fcache "k8s.io/client-go/tools/cache/testing"
+	testingclock "k8s.io/utils/clock/testing"
 )
 
 type testListener struct {
@@ -104,7 +105,7 @@ func TestListenerResyncPeriods(t *testing.T) {
 	// create the shared informer and resync every 1s
 	informer := NewSharedInformer(source, &v1.Pod{}, 1*time.Second).(*sharedIndexInformer)
 
-	clock := clock.NewFakeClock(time.Now())
+	clock := testingclock.NewFakeClock(time.Now())
 	informer.clock = clock
 	informer.processor.clock = clock
 
@@ -189,7 +190,7 @@ func TestResyncCheckPeriod(t *testing.T) {
 	// create the shared informer and resync every 12 hours
 	informer := NewSharedInformer(source, &v1.Pod{}, 12*time.Hour).(*sharedIndexInformer)
 
-	clock := clock.NewFakeClock(time.Now())
+	clock := testingclock.NewFakeClock(time.Now())
 	informer.clock = clock
 	informer.processor.clock = clock
 
@@ -277,7 +278,7 @@ func TestSharedInformerWatchDisruption(t *testing.T) {
 	// create the shared informer and resync every 1s
 	informer := NewSharedInformer(source, &v1.Pod{}, 1*time.Second).(*sharedIndexInformer)
 
-	clock := clock.NewFakeClock(time.Now())
+	clock := testingclock.NewFakeClock(time.Now())
 	informer.clock = clock
 	informer.processor.clock = clock
 
@@ -328,5 +329,64 @@ func TestSharedInformerWatchDisruption(t *testing.T) {
 		if !listener.ok() {
 			t.Errorf("%s: expected %v, got %v", listener.name, listener.expectedItemNames, listener.receivedItemNames)
 		}
+	}
+}
+
+func TestSharedInformerErrorHandling(t *testing.T) {
+	source := fcache.NewFakeControllerSource()
+	source.Add(&v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod1"}})
+	source.ListError = fmt.Errorf("Access Denied")
+
+	informer := NewSharedInformer(source, &v1.Pod{}, 1*time.Second).(*sharedIndexInformer)
+
+	errCh := make(chan error)
+	_ = informer.SetWatchErrorHandler(func(_ *Reflector, err error) {
+		errCh <- err
+	})
+
+	stop := make(chan struct{})
+	go informer.Run(stop)
+
+	select {
+	case err := <-errCh:
+		if !strings.Contains(err.Error(), "Access Denied") {
+			t.Errorf("Expected 'Access Denied' error. Actual: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Errorf("Timeout waiting for error handler call")
+	}
+	close(stop)
+}
+
+func TestSharedInformerTransformer(t *testing.T) {
+	// source simulates an apiserver object endpoint.
+	source := fcache.NewFakeControllerSource()
+
+	source.Add(&v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod1", UID: "pod1", ResourceVersion: "1"}})
+	source.Add(&v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod2", UID: "pod2", ResourceVersion: "2"}})
+
+	informer := NewSharedInformer(source, &v1.Pod{}, 1*time.Second).(*sharedIndexInformer)
+	informer.SetTransform(func(obj interface{}) (interface{}, error) {
+		if pod, ok := obj.(*v1.Pod); ok {
+			name := pod.GetName()
+
+			if upper := strings.ToUpper(name); upper != name {
+				copied := pod.DeepCopyObject().(*v1.Pod)
+				copied.SetName(upper)
+				return copied, nil
+			}
+		}
+		return obj, nil
+	})
+
+	listenerTransformer := newTestListener("listenerTransformer", 0, "POD1", "POD2")
+	informer.AddEventHandler(listenerTransformer)
+
+	stop := make(chan struct{})
+	go informer.Run(stop)
+	defer close(stop)
+
+	if !listenerTransformer.ok() {
+		t.Errorf("%s: expected %v, got %v", listenerTransformer.name, listenerTransformer.expectedItemNames, listenerTransformer.receivedItemNames)
 	}
 }

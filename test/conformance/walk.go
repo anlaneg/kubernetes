@@ -23,7 +23,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"gopkg.in/yaml.v2"
 	"io"
 	"log"
 	"os"
@@ -33,8 +32,26 @@ import (
 	"strings"
 	"text/template"
 
+	"gopkg.in/yaml.v2"
+
 	"github.com/onsi/ginkgo/types"
 )
+
+// ConformanceData describes the structure of the conformance.yaml file
+type ConformanceData struct {
+	// A URL to the line of code in the kube src repo for the test. Omitted from the YAML to avoid exposing line number.
+	URL string `yaml:"-"`
+	// Extracted from the "Testname:" comment before the test
+	TestName string
+	// CodeName is taken from the actual ginkgo descriptions, e.g. `[sig-apps] Foo should bar [Conformance]`
+	CodeName string
+	// Extracted from the "Description:" comment before the test
+	Description string
+	// Version when this test is added or modified ex: v1.12, v1.13
+	Release string
+	// File is the filename where the test is defined. We intentionally don't save the line here to avoid meaningless changes.
+	File string
+}
 
 var (
 	baseURL = flag.String("url", "https://github.com/kubernetes/kubernetes/tree/master/", "location of the current source")
@@ -63,21 +80,6 @@ type frame struct {
 	Line int
 }
 
-type conformanceData struct {
-	// A URL to the line of code in the kube src repo for the test. Omitted from the YAML to avoid exposing line number.
-	URL string `yaml:"-"`
-	// Extracted from the "Testname:" comment before the test
-	TestName string
-	// CodeName is taken from the actual ginkgo descriptions, e.g. `[sig-apps] Foo should bar [Conformance]`
-	CodeName string
-	// Extracted from the "Description:" comment before the test
-	Description string
-	// Version when this test is added or modified ex: v1.12, v1.13
-	Release string
-	// File is the filename where the test is defined. We intentionally don't save the line here to avoid meaningless changes.
-	File string
-}
-
 func main() {
 	flag.Parse()
 
@@ -93,7 +95,7 @@ func main() {
 
 	seenLines = map[string]struct{}{}
 	dec := json.NewDecoder(f)
-	testInfos := []*conformanceData{}
+	testInfos := []*ConformanceData{}
 	for {
 		var spec *types.SpecSummary
 		if err := dec.Decode(&spec); err == io.EOF {
@@ -122,8 +124,8 @@ func isConformance(spec *types.SpecSummary) bool {
 	return strings.Contains(getTestName(spec), "[Conformance]")
 }
 
-func getTestInfo(spec *types.SpecSummary) *conformanceData {
-	var c *conformanceData
+func getTestInfo(spec *types.SpecSummary) *ConformanceData {
+	var c *ConformanceData
 	var err error
 	// The key to this working is that we don't need to parse every file or walk
 	// every componentCodeLocation. The last componentCodeLocation is going to typically start
@@ -153,7 +155,7 @@ func getTestName(spec *types.SpecSummary) string {
 	return strings.Join(spec.ComponentTexts[1:], " ")
 }
 
-func saveAllTestInfo(dataSet []*conformanceData) {
+func saveAllTestInfo(dataSet []*ConformanceData) {
 	if *confDoc {
 		// Note: this assumes that you're running from the root of the kube src repo
 		templ, err := template.ParseFiles("./test/conformance/cf_header.md")
@@ -184,7 +186,7 @@ func saveAllTestInfo(dataSet []*conformanceData) {
 	fmt.Println(string(b))
 }
 
-func getConformanceDataFromStackTrace(fullstackstrace string) (*conformanceData, error) {
+func getConformanceDataFromStackTrace(fullstackstrace string) (*ConformanceData, error) {
 	// The full stacktrace to parse from ginkgo is of the form:
 	// k8s.io/kubernetes/test/e2e/storage/utils.SIGDescribe(0x51f4c4f, 0xf, 0x53a0dd8, 0xc000ab6e01)\n\ttest/e2e/storage/utils/framework.go:23 +0x75\n ... ...
 	// So we need to split it into lines, remove whitespace, and then grab the files/lines.
@@ -207,11 +209,14 @@ func getConformanceDataFromStackTrace(fullstackstrace string) (*conformanceData,
 		i += 2
 	}
 
-	// filenames have `/go/src/k8s.io` prefix which dont exist locally
-	for i, v := range frames {
-		frames[i].File = strings.Replace(v.File,
-			"/go/src/k8s.io/kubernetes/_output/dockerized/go/src/k8s.io/kubernetes",
-			*k8sPath, 1)
+	// filenames are in one of two special GOPATHs depending on if they were
+	// built dockerized or with the host go
+	// we want to trim this prefix to produce portable relative paths
+	k8sSRC := *k8sPath + "/_output/local/go/src/k8s.io/kubernetes/"
+	for i := range frames {
+		trimmedFile := strings.TrimPrefix(frames[i].File, k8sSRC)
+		trimmedFile = strings.TrimPrefix(trimmedFile, "/go/src/k8s.io/kubernetes/_output/dockerized/go/src/k8s.io/kubernetes/")
+		frames[i].File = trimmedFile
 	}
 
 	for _, curFrame := range frames {
@@ -238,7 +243,7 @@ func getConformanceDataFromStackTrace(fullstackstrace string) (*conformanceData,
 
 // scanFileForFrame will scan the target and look for a conformance comment attached to the function
 // described by the target frame. If the comment can't be found then nil, nil is returned.
-func scanFileForFrame(filename string, src interface{}, targetFrame frame) (*conformanceData, error) {
+func scanFileForFrame(filename string, src interface{}, targetFrame frame) (*ConformanceData, error) {
 	fset := token.NewFileSet() // positions are relative to fset
 	f, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
 	if err != nil {
@@ -264,7 +269,7 @@ func validateTestName(s string) error {
 	return nil
 }
 
-func tryCommentGroupAndFrame(fset *token.FileSet, cg *ast.CommentGroup, f frame) *conformanceData {
+func tryCommentGroupAndFrame(fset *token.FileSet, cg *ast.CommentGroup, f frame) *ConformanceData {
 	if !shouldProcessCommentGroup(fset, cg, f) {
 		return nil
 	}
@@ -288,29 +293,38 @@ func shouldProcessCommentGroup(fset *token.FileSet, cg *ast.CommentGroup, f fram
 	return lineDiff > 0 && lineDiff <= conformanceCommentsLineWindow
 }
 
-func commentToConformanceData(comment string) *conformanceData {
+func commentToConformanceData(comment string) *ConformanceData {
 	lines := strings.Split(comment, "\n")
 	descLines := []string{}
-	cd := &conformanceData{}
+	cd := &ConformanceData{}
+	var curLine string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}
 		if sline := regexp.MustCompile("^Testname\\s*:\\s*").Split(line, -1); len(sline) == 2 {
+			curLine = "Testname"
 			cd.TestName = sline[1]
 			continue
 		}
 		if sline := regexp.MustCompile("^Release\\s*:\\s*").Split(line, -1); len(sline) == 2 {
+			curLine = "Release"
 			cd.Release = sline[1]
 			continue
 		}
 		if sline := regexp.MustCompile("^Description\\s*:\\s*").Split(line, -1); len(sline) == 2 {
-			line = sline[1]
+			curLine = "Description"
+			descLines = append(descLines, sline[1])
+			continue
 		}
-		descLines = append(descLines, line)
+
+		// Line has no header
+		if curLine == "Description" {
+			descLines = append(descLines, line)
+		}
 	}
-	if cd.Release == "" && cd.TestName == "" {
+	if cd.TestName == "" {
 		return nil
 	}
 

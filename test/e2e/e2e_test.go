@@ -24,21 +24,27 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v2"
+
 	// Never, ever remove the line with "/ginkgo". Without it,
 	// the ginkgo test runner will not detect that this
 	// directory contains a Ginkgo test suite.
 	// See https://github.com/kubernetes/kubernetes/issues/74827
 	// "github.com/onsi/ginkgo"
 
+	"k8s.io/component-base/version"
+	conformancetestdata "k8s.io/kubernetes/test/conformance/testdata"
 	"k8s.io/kubernetes/test/e2e/framework"
 	"k8s.io/kubernetes/test/e2e/framework/config"
 	"k8s.io/kubernetes/test/e2e/framework/testfiles"
-	"k8s.io/kubernetes/test/e2e/generated"
+	e2etestingmanifests "k8s.io/kubernetes/test/e2e/testing-manifests"
+	testfixtures "k8s.io/kubernetes/test/fixtures"
 	"k8s.io/kubernetes/test/utils/image"
 
 	// test sources
 	_ "k8s.io/kubernetes/test/e2e/apimachinery"
 	_ "k8s.io/kubernetes/test/e2e/apps"
+	_ "k8s.io/kubernetes/test/e2e/architecture"
 	_ "k8s.io/kubernetes/test/e2e/auth"
 	_ "k8s.io/kubernetes/test/e2e/autoscaling"
 	_ "k8s.io/kubernetes/test/e2e/cloud"
@@ -50,14 +56,11 @@ import (
 	_ "k8s.io/kubernetes/test/e2e/network"
 	_ "k8s.io/kubernetes/test/e2e/node"
 	_ "k8s.io/kubernetes/test/e2e/scheduling"
-	_ "k8s.io/kubernetes/test/e2e/servicecatalog"
 	_ "k8s.io/kubernetes/test/e2e/storage"
 	_ "k8s.io/kubernetes/test/e2e/storage/external"
 	_ "k8s.io/kubernetes/test/e2e/ui"
 	_ "k8s.io/kubernetes/test/e2e/windows"
 )
-
-var viperConfig = flag.String("viper-config", "", "The name of a viper config file (https://github.com/spf13/viper#what-is-viper). All e2e command line parameters can also be configured in such a file. May contain a path and may or may not contain the file suffix. The default is to look for an optional file with `e2e` as base name. If a file is specified explicitly, it must be present.")
 
 // handleFlags sets up all flags and parses the command line.
 func handleFlags() {
@@ -68,20 +71,49 @@ func handleFlags() {
 }
 
 func TestMain(m *testing.M) {
+	var versionFlag bool
+	flag.CommandLine.BoolVar(&versionFlag, "version", false, "Displays version information.")
+
 	// Register test flags, then parse flags.
 	handleFlags()
-
-	// Now that we know which Viper config (if any) was chosen,
-	// parse it and update those options which weren't already set via command line flags
-	// (which have higher priority).
-	if err := viperizeFlags(*viperConfig, "e2e", flag.CommandLine); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 
 	if framework.TestContext.ListImages {
 		for _, v := range image.GetImageConfigs() {
 			fmt.Println(v.GetE2EImage())
+		}
+		os.Exit(0)
+	}
+	if versionFlag {
+		fmt.Printf("%s\n", version.Get())
+		os.Exit(0)
+	}
+
+	// Enable embedded FS file lookup as fallback
+	testfiles.AddFileSource(e2etestingmanifests.GetE2ETestingManifestsFS())
+	testfiles.AddFileSource(testfixtures.GetTestFixturesFS())
+	testfiles.AddFileSource(conformancetestdata.GetConformanceTestdataFS())
+
+	if framework.TestContext.ListConformanceTests {
+		var tests []struct {
+			Testname    string `yaml:"testname"`
+			Codename    string `yaml:"codename"`
+			Description string `yaml:"description"`
+			Release     string `yaml:"release"`
+			File        string `yaml:"file"`
+		}
+
+		data, err := testfiles.Read("test/conformance/testdata/conformance.yaml")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := yaml.Unmarshal(data, &tests); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := yaml.NewEncoder(os.Stdout).Encode(tests); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
 		}
 		os.Exit(0)
 	}
@@ -96,12 +128,6 @@ func TestMain(m *testing.M) {
 	if framework.TestContext.RepoRoot != "" {
 		testfiles.AddFileSource(testfiles.RootFileSource{Root: framework.TestContext.RepoRoot})
 	}
-
-	// Enable bindata file lookup as fallback.
-	testfiles.AddFileSource(testfiles.BindataFileSource{
-		Asset:      generated.Asset,
-		AssetNames: generated.AssetNames,
-	})
 
 	rand.Seed(time.Now().UnixNano())
 	os.Exit(m.Run())

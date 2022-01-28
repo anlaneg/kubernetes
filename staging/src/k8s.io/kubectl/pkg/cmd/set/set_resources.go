@@ -20,7 +20,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -38,12 +38,12 @@ import (
 )
 
 var (
-	resourcesLong = templates.LongDesc(`
-		Specify compute resource requirements (cpu, memory) for any resource that defines a pod template.  If a pod is successfully scheduled, it is guaranteed the amount of resource requested, but may burst up to its specified limits.
+	resourcesLong = templates.LongDesc(i18n.T(`
+		Specify compute resource requirements (CPU, memory) for any resource that defines a pod template.  If a pod is successfully scheduled, it is guaranteed the amount of resource requested, but may burst up to its specified limits.
 
-		for each compute resource, if a limit is specified and a request is omitted, the request will default to the limit.
+		For each compute resource, if a limit is specified and a request is omitted, the request will default to the limit.
 
-		Possible resources include (case insensitive): %s.`)
+		Possible resources include (case insensitive): %s.`))
 
 	resourcesExample = templates.Examples(`
 		# Set a deployments nginx container cpu limits to "200m" and memory to "512Mi"
@@ -73,6 +73,7 @@ type SetResourcesOptions struct {
 	Output            string
 	All               bool
 	Local             bool
+	fieldManager      string
 
 	DryRunStrategy cmdutil.DryRunStrategy
 
@@ -129,13 +130,14 @@ func NewCmdResources(f cmdutil.Factory, streams genericclioptions.IOStreams) *co
 	//kubectl.AddJsonFilenameFlag(cmd, &options.Filenames, usage)
 	usage := "identifying the resource to get from a server."
 	cmdutil.AddFilenameOptionFlags(cmd, &o.FilenameOptions, usage)
-	cmd.Flags().BoolVar(&o.All, "all", o.All, "Select all resources, including uninitialized ones, in the namespace of the specified resource types")
-	cmd.Flags().StringVarP(&o.Selector, "selector", "l", o.Selector, "Selector (label query) to filter on, not including uninitialized ones,supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2)")
+	cmd.Flags().BoolVar(&o.All, "all", o.All, "Select all resources, in the namespace of the specified resource types")
+	cmdutil.AddLabelSelectorFlagVar(cmd, &o.Selector)
 	cmd.Flags().StringVarP(&o.ContainerSelector, "containers", "c", o.ContainerSelector, "The names of containers in the selected pod templates to change, all containers are selected by default - may use wildcards")
 	cmd.Flags().BoolVar(&o.Local, "local", o.Local, "If true, set resources will NOT contact api-server but run locally.")
 	cmdutil.AddDryRunFlag(cmd)
 	cmd.Flags().StringVar(&o.Limits, "limits", o.Limits, "The resource requirement requests for this container.  For example, 'cpu=100m,memory=256Mi'.  Note that server side components may assign requests depending on the server configuration, such as limit ranges.")
 	cmd.Flags().StringVar(&o.Requests, "requests", o.Requests, "The resource requirement requests for this container.  For example, 'cpu=100m,memory=256Mi'.  Note that server side components may assign requests depending on the server configuration, such as limit ranges.")
+	cmdutil.AddFieldManagerFlagVar(cmd, &o.fieldManager, "kubectl-set")
 	return cmd
 }
 
@@ -159,11 +161,7 @@ func (o *SetResourcesOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, ar
 	if err != nil {
 		return err
 	}
-	discoveryClient, err := f.ToDiscoveryClient()
-	if err != nil {
-		return err
-	}
-	o.DryRunVerifier = resource.NewDryRunVerifier(dynamicClient, discoveryClient)
+	o.DryRunVerifier = resource.NewDryRunVerifier(dynamicClient, f.OpenAPIGetter())
 
 	cmdutil.PrintFlagsWithDryRunStrategy(o.PrintFlags, o.DryRunStrategy)
 	printer, err := o.PrintFlags.ToPrinter()
@@ -234,7 +232,9 @@ func (o *SetResourcesOptions) Run() error {
 	patches := CalculatePatches(o.Infos, scheme.DefaultJSONEncoder(), func(obj runtime.Object) ([]byte, error) {
 		transformed := false
 		_, err := o.UpdatePodSpecForObject(obj, func(spec *v1.PodSpec) error {
+			initContainers, _ := selectContainers(spec.InitContainers, o.ContainerSelector)
 			containers, _ := selectContainers(spec.Containers, o.ContainerSelector)
+			containers = append(containers, initContainers...)
 			if len(containers) != 0 {
 				for i := range containers {
 					if len(o.Limits) != 0 && len(containers[i].Resources.Limits) == 0 {
@@ -301,6 +301,7 @@ func (o *SetResourcesOptions) Run() error {
 		actual, err := resource.
 			NewHelper(info.Client, info.Mapping).
 			DryRun(o.DryRunStrategy == cmdutil.DryRunServer).
+			WithFieldManager(o.fieldManager).
 			Patch(info.Namespace, info.Name, types.StrategicMergePatchType, patch.Patch, nil)
 		if err != nil {
 			allErrs = append(allErrs, fmt.Errorf("failed to patch resources update to pod template %v", err))

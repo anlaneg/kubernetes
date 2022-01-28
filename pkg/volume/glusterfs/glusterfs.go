@@ -18,10 +18,11 @@ package glusterfs
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"math"
 	"math/rand"
-	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,8 +32,9 @@ import (
 
 	gcli "github.com/heketi/heketi/client/api/go-client"
 	gapi "github.com/heketi/heketi/pkg/glusterfs/api"
-	"k8s.io/klog"
-	"k8s.io/utils/mount"
+	"k8s.io/klog/v2"
+	"k8s.io/mount-utils"
+	netutils "k8s.io/utils/net"
 	utilstrings "k8s.io/utils/strings"
 
 	v1 "k8s.io/api/core/v1"
@@ -45,7 +47,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	clientset "k8s.io/client-go/kubernetes"
 	volumehelpers "k8s.io/cloud-provider/volume/helpers"
-	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
+	storagehelpers "k8s.io/component-helpers/storage/volume"
+	proxyutil "k8s.io/kubernetes/pkg/proxy/util"
 	"k8s.io/kubernetes/pkg/volume"
 	volutil "k8s.io/kubernetes/pkg/volume/util"
 )
@@ -74,7 +77,6 @@ const (
 	volPrefix                      = "vol_"
 	dynamicEpSvcPrefix             = "glusterfs-dynamic"
 	replicaCount                   = 3
-	durabilityType                 = "replicate"
 	secretKeyName                  = "key" // key name used in secret
 	gciLinuxGlusterMountBinaryPath = "/sbin/mount.glusterfs"
 	defaultGidMin                  = 2000
@@ -120,7 +122,7 @@ func (plugin *glusterfsPlugin) CanSupport(spec *volume.Spec) bool {
 		(spec.Volume != nil && spec.Volume.Glusterfs != nil)
 }
 
-func (plugin *glusterfsPlugin) RequiresRemount() bool {
+func (plugin *glusterfsPlugin) RequiresRemount(spec *volume.Spec) bool {
 	return false
 }
 
@@ -461,7 +463,7 @@ type provisionerConfig struct {
 	userKey            string
 	secretNamespace    string
 	secretName         string
-	secretValue        string
+	secretValue        string `datapolicy:"token"`
 	clusterID          string
 	gidMin             int
 	gidMax             int
@@ -548,7 +550,7 @@ func (plugin *glusterfsPlugin) collectGids(className string, gidTable *MinMaxAll
 		return fmt.Errorf("failed to get existing persistent volumes")
 	}
 	for _, pv := range pvList.Items {
-		if v1helper.GetPersistentVolumeClass(&pv) != className {
+		if storagehelpers.GetPersistentVolumeClass(&pv) != className {
 			continue
 		}
 		pvName := pv.ObjectMeta.Name
@@ -662,7 +664,7 @@ func (d *glusterfsVolumeDeleter) Delete() error {
 			return fmt.Errorf("failed to release gid %v: %v", gid, err)
 		}
 	}
-	cli := gcli.NewClient(d.url, d.user, d.secretValue)
+	cli := filterClient(gcli.NewClient(d.url, d.user, d.secretValue), d.plugin.host.GetFilteredDialOptions())
 	if cli == nil {
 		klog.Errorf("failed to create glusterfs REST client")
 		return fmt.Errorf("failed to create glusterfs REST client, REST server authentication failed")
@@ -670,8 +672,9 @@ func (d *glusterfsVolumeDeleter) Delete() error {
 	err = cli.VolumeDelete(volumeID)
 	if err != nil {
 		if dstrings.TrimSpace(err.Error()) != errIDNotFound {
-			klog.Errorf("failed to delete volume %s: %v", volumeName, err)
-			return fmt.Errorf("failed to delete volume %s: %v", volumeName, err)
+			// don't log error details from client calls in events
+			klog.V(4).Infof("failed to delete volume %s: %v", volumeName, err)
+			return fmt.Errorf("failed to delete volume: see kube-controller-manager.log for details")
 		}
 		klog.V(2).Infof("volume %s not present in heketi, ignoring", volumeName)
 	}
@@ -702,8 +705,22 @@ func (d *glusterfsVolumeDeleter) Delete() error {
 	return nil
 }
 
+func filterClient(client *gcli.Client, opts *proxyutil.FilteredDialOptions) *gcli.Client {
+	if opts == nil {
+		return client
+	}
+	dialer := proxyutil.NewFilteredDialContext(nil, nil, opts)
+	client.SetClientFunc(func(tlsConfig *tls.Config, checkRedirect gcli.CheckRedirectFunc) (gcli.HttpPerformer, error) {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.DialContext = dialer
+		transport.TLSClientConfig = tlsConfig
+		return &http.Client{Transport: transport, CheckRedirect: checkRedirect}, nil
+	})
+	return client
+}
+
 func (p *glusterfsVolumeProvisioner) Provision(selectedNode *v1.Node, allowedTopologies []v1.TopologySelectorTerm) (*v1.PersistentVolume, error) {
-	if !volutil.AccessModesContainedInAll(p.plugin.GetAccessModes(), p.options.PVC.Spec.AccessModes) {
+	if !volutil.ContainsAllAccessModes(p.plugin.GetAccessModes(), p.options.PVC.Spec.AccessModes) {
 		return nil, fmt.Errorf("invalid AccessModes %v: only AccessModes %v are supported", p.options.PVC.Spec.AccessModes, p.plugin.GetAccessModes())
 	}
 	if p.options.PVC.Spec.Selector != nil {
@@ -714,7 +731,7 @@ func (p *glusterfsVolumeProvisioner) Provision(selectedNode *v1.Node, allowedTop
 		return nil, fmt.Errorf("%s does not support block volume provisioning", p.plugin.GetPluginName())
 	}
 	klog.V(4).Infof("provision volume with options %v", p.options)
-	scName := v1helper.GetPersistentVolumeClaimClass(p.options.PVC)
+	scName := storagehelpers.GetPersistentVolumeClaimClass(p.options.PVC)
 	cfg, err := parseClassParameters(p.options.Parameters, p.plugin.host.GetKubeClient())
 	if err != nil {
 		return nil, err
@@ -793,7 +810,7 @@ func (p *glusterfsVolumeProvisioner) CreateVolume(gid int) (r *v1.GlusterfsPersi
 	if p.url == "" {
 		return nil, 0, "", fmt.Errorf("failed to create glusterfs REST client, REST URL is empty")
 	}
-	cli := gcli.NewClient(p.url, p.user, p.secretValue)
+	cli := filterClient(gcli.NewClient(p.url, p.user, p.secretValue), p.plugin.host.GetFilteredDialOptions())
 	if cli == nil {
 		return nil, 0, "", fmt.Errorf("failed to create glusterfs REST client, REST server authentication failed")
 	}
@@ -816,7 +833,9 @@ func (p *glusterfsVolumeProvisioner) CreateVolume(gid int) (r *v1.GlusterfsPersi
 	volumeReq := &gapi.VolumeCreateRequest{Size: sz, Name: customVolumeName, Clusters: clusterIDs, Gid: gid64, Durability: p.volumeType, GlusterVolumeOptions: p.volumeOptions, Snapshot: snaps}
 	volume, err := cli.VolumeCreate(volumeReq)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("failed to create volume: %v", err)
+		// don't log error details from client calls in events
+		klog.V(4).Infof("failed to create volume: %v", err)
+		return nil, 0, "", fmt.Errorf("failed to create volume: see kube-controller-manager.log for details")
 	}
 	klog.V(1).Infof("volume with size %d and name %s created", volume.Size, volume.Name)
 	volID = volume.Id
@@ -837,7 +856,8 @@ func (p *glusterfsVolumeProvisioner) CreateVolume(gid int) (r *v1.GlusterfsPersi
 	if err != nil {
 		deleteErr := cli.VolumeDelete(volume.Id)
 		if deleteErr != nil {
-			klog.Errorf("failed to delete volume: %v, manual deletion of the volume required", deleteErr)
+			// don't log error details from client calls in events
+			klog.V(4).Infof("failed to delete volume: %v, manual deletion of the volume required", deleteErr)
 		}
 		klog.V(3).Infof("failed to update endpoint, deleting %s", endpoint)
 		err = kubeClient.CoreV1().Services(epNamespace).Delete(context.TODO(), epServiceName, metav1.DeleteOptions{})
@@ -955,7 +975,9 @@ func parseSecret(namespace, secretName string, kubeClient clientset.Interface) (
 func getClusterNodes(cli *gcli.Client, cluster string) (dynamicHostIps []string, err error) {
 	clusterinfo, err := cli.ClusterInfo(cluster)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get cluster details: %v", err)
+		// don't log error details from client calls in events
+		klog.V(4).Infof("failed to get cluster details: %v", err)
+		return nil, fmt.Errorf("failed to get cluster details: see kube-controller-manager.log for details")
 	}
 
 	// For the dynamically provisioned volume, we gather the list of node IPs
@@ -964,11 +986,13 @@ func getClusterNodes(cli *gcli.Client, cluster string) (dynamicHostIps []string,
 	for _, node := range clusterinfo.Nodes {
 		nodeInfo, err := cli.NodeInfo(string(node))
 		if err != nil {
-			return nil, fmt.Errorf("failed to get host ipaddress: %v", err)
+			// don't log error details from client calls in events
+			klog.V(4).Infof("failed to get host ipaddress: %v", err)
+			return nil, fmt.Errorf("failed to get host ipaddress: see kube-controller-manager.log for details")
 		}
 		ipaddr := dstrings.Join(nodeInfo.NodeAddRequest.Hostnames.Storage, "")
 		// IP validates if a string is a valid IP address.
-		ip := net.ParseIP(ipaddr)
+		ip := netutils.ParseIPSloppy(ipaddr)
 		if ip == nil {
 			return nil, fmt.Errorf("glusterfs server node ip address %s must be a valid IP address, (e.g. 10.9.8.7)", ipaddr)
 		}
@@ -1197,24 +1221,32 @@ func (plugin *glusterfsPlugin) ExpandVolumeDevice(spec *volume.Spec, newSize res
 	klog.V(4).Infof("expanding volume: %q", volumeID)
 
 	//Create REST server connection
-	cli := gcli.NewClient(cfg.url, cfg.user, cfg.secretValue)
+	cli := filterClient(gcli.NewClient(cfg.url, cfg.user, cfg.secretValue), plugin.host.GetFilteredDialOptions())
 	if cli == nil {
 		klog.Errorf("failed to create glusterfs REST client")
 		return oldSize, fmt.Errorf("failed to create glusterfs REST client, REST server authentication failed")
 	}
 
 	// Find out delta size
-	expansionSize := resource.NewScaledQuantity((newSize.Value() - oldSize.Value()), 0)
-	expansionSizeGiB := int(volumehelpers.RoundUpToGiB(*expansionSize))
+	expansionSize := newSize
+	expansionSize.Sub(oldSize)
+	expansionSizeGiB, err := volumehelpers.RoundUpToGiBInt(expansionSize)
+	if err != nil {
+		return oldSize, err
+	}
 
 	// Find out requested Size
-	requestGiB := volumehelpers.RoundUpToGiB(newSize)
+	requestGiB, err := volumehelpers.RoundUpToGiB(newSize)
+	if err != nil {
+		return oldSize, err
+	}
 
 	//Check the existing volume size
 	currentVolumeInfo, err := cli.VolumeInfo(volumeID)
 	if err != nil {
-		klog.Errorf("error when fetching details of volume %s: %v", volumeName, err)
-		return oldSize, err
+		// don't log error details from client calls in events
+		klog.V(4).Infof("error when fetching details of volume %s: %v", volumeName, err)
+		return oldSize, fmt.Errorf("failed to get volume info %s: see kube-controller-manager.log for details", volumeName)
 	}
 	if int64(currentVolumeInfo.Size) >= requestGiB {
 		return newSize, nil
@@ -1226,8 +1258,9 @@ func (plugin *glusterfsPlugin) ExpandVolumeDevice(spec *volume.Spec, newSize res
 	// Expand the volume
 	volumeInfoRes, err := cli.VolumeExpand(volumeID, volumeExpandReq)
 	if err != nil {
-		klog.Errorf("failed to expand volume %s: %v", volumeName, err)
-		return oldSize, err
+		// don't log error details from client calls in events
+		klog.V(4).Infof("failed to expand volume %s: %v", volumeName, err)
+		return oldSize, fmt.Errorf("failed to expand volume: see kube-controller-manager.log for details")
 	}
 	klog.V(2).Infof("volume %s expanded to new size %d successfully", volumeName, volumeInfoRes.Size)
 	newVolumeSize := resource.MustParse(fmt.Sprintf("%dGi", volumeInfoRes.Size))

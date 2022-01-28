@@ -24,7 +24,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"gopkg.in/square/go-jose.v2/jwt"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	"k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -409,7 +409,10 @@ func TestTokenCreation(t *testing.T) {
 
 			DeletedServiceAccount: serviceAccount(tokenSecretReferences()),
 			ExpectedActions: []core.Action{
-				core.NewDeleteAction(schema.GroupVersionResource{Version: "v1", Resource: "secrets"}, metav1.NamespaceDefault, "token-secret-1"),
+				core.NewDeleteActionWithOptions(
+					schema.GroupVersionResource{Version: "v1", Resource: "secrets"},
+					metav1.NamespaceDefault, "token-secret-1",
+					*metav1.NewPreconditionDeleteOptions("23456")),
 			},
 		},
 
@@ -419,7 +422,10 @@ func TestTokenCreation(t *testing.T) {
 			AddedSecret: serviceAccountTokenSecret(),
 			ExpectedActions: []core.Action{
 				core.NewGetAction(schema.GroupVersionResource{Version: "v1", Resource: "serviceaccounts"}, metav1.NamespaceDefault, "default"),
-				core.NewDeleteAction(schema.GroupVersionResource{Version: "v1", Resource: "secrets"}, metav1.NamespaceDefault, "token-secret-1"),
+				core.NewDeleteActionWithOptions(
+					schema.GroupVersionResource{Version: "v1", Resource: "secrets"},
+					metav1.NamespaceDefault, "token-secret-1",
+					*metav1.NewPreconditionDeleteOptions("23456")),
 			},
 		},
 		"added secret with serviceaccount": {
@@ -484,7 +490,10 @@ func TestTokenCreation(t *testing.T) {
 			UpdatedSecret: serviceAccountTokenSecret(),
 			ExpectedActions: []core.Action{
 				core.NewGetAction(schema.GroupVersionResource{Version: "v1", Resource: "serviceaccounts"}, metav1.NamespaceDefault, "default"),
-				core.NewDeleteAction(schema.GroupVersionResource{Version: "v1", Resource: "secrets"}, metav1.NamespaceDefault, "token-secret-1"),
+				core.NewDeleteActionWithOptions(
+					schema.GroupVersionResource{Version: "v1", Resource: "secrets"},
+					metav1.NamespaceDefault, "token-secret-1",
+					*metav1.NewPreconditionDeleteOptions("23456")),
 			},
 		},
 		"updated secret with serviceaccount": {

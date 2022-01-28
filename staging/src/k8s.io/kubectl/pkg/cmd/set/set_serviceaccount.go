@@ -22,7 +22,7 @@ import (
 
 	"github.com/spf13/cobra"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -38,20 +38,20 @@ import (
 )
 
 var (
-	serviceaccountResources = `
-	replicationcontroller (rc), deployment (deploy), daemonset (ds), job, replicaset (rs), statefulset`
+	serviceaccountResources = i18n.T(`replicationcontroller (rc), deployment (deploy), daemonset (ds), job, replicaset (rs), statefulset`)
 
 	serviceaccountLong = templates.LongDesc(i18n.T(`
-	Update ServiceAccount of pod template resources.
+	Update the service account of pod template resources.
 
 	Possible resources (case insensitive) can be:
-	` + serviceaccountResources))
+
+	`) + serviceaccountResources)
 
 	serviceaccountExample = templates.Examples(i18n.T(`
-	# Set Deployment nginx-deployment's ServiceAccount to serviceaccount1
+	# Set deployment nginx-deployment's service account to serviceaccount1
 	kubectl set serviceaccount deployment nginx-deployment serviceaccount1
 
-	# Print the result (in yaml format) of updated nginx deployment with serviceaccount from local file, without hitting apiserver
+	# Print the result (in YAML format) of updated nginx deployment with the service account from local file, without hitting the API server
 	kubectl set sa -f nginx-deployment.yaml serviceaccount1 --local --dry-run=client -o yaml
 	`))
 )
@@ -71,6 +71,7 @@ type SetServiceAccountOptions struct {
 	updatePodSpecForObject polymorphichelpers.UpdatePodSpecForObjectFunc
 	infos                  []*resource.Info
 	serviceAccountName     string
+	fieldManager           string
 
 	PrintObj printers.ResourcePrinterFunc
 	Recorder genericclioptions.Recorder
@@ -98,7 +99,7 @@ func NewCmdServiceAccount(f cmdutil.Factory, streams genericclioptions.IOStreams
 		Use:                   "serviceaccount (-f FILENAME | TYPE NAME) SERVICE_ACCOUNT",
 		DisableFlagsInUseLine: true,
 		Aliases:               []string{"sa"},
-		Short:                 i18n.T("Update ServiceAccount of a resource"),
+		Short:                 i18n.T("Update the service account of a resource"),
 		Long:                  serviceaccountLong,
 		Example:               serviceaccountExample,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -112,9 +113,10 @@ func NewCmdServiceAccount(f cmdutil.Factory, streams genericclioptions.IOStreams
 
 	usage := "identifying the resource to get from a server."
 	cmdutil.AddFilenameOptionFlags(cmd, &o.fileNameOptions, usage)
-	cmd.Flags().BoolVar(&o.all, "all", o.all, "Select all resources, including uninitialized ones, in the namespace of the specified resource types")
+	cmd.Flags().BoolVar(&o.all, "all", o.all, "Select all resources, in the namespace of the specified resource types")
 	cmd.Flags().BoolVar(&o.local, "local", o.local, "If true, set serviceaccount will NOT contact api-server but run locally.")
 	cmdutil.AddDryRunFlag(cmd)
+	cmdutil.AddFieldManagerFlagVar(cmd, &o.fieldManager, "kubectl-set")
 	return cmd
 }
 
@@ -140,11 +142,7 @@ func (o *SetServiceAccountOptions) Complete(f cmdutil.Factory, cmd *cobra.Comman
 	if err != nil {
 		return err
 	}
-	discoveryClient, err := f.ToDiscoveryClient()
-	if err != nil {
-		return err
-	}
-	o.dryRunVerifier = resource.NewDryRunVerifier(dynamicClient, discoveryClient)
+	o.dryRunVerifier = resource.NewDryRunVerifier(dynamicClient, f.OpenAPIGetter())
 	o.output = cmdutil.GetFlagString(cmd, "output")
 	o.updatePodSpecForObject = polymorphichelpers.UpdatePodSpecForObjectFn
 
@@ -224,6 +222,7 @@ func (o *SetServiceAccountOptions) Run() error {
 		actual, err := resource.
 			NewHelper(info.Client, info.Mapping).
 			DryRun(o.dryRunStrategy == cmdutil.DryRunServer).
+			WithFieldManager(o.fieldManager).
 			Patch(info.Namespace, info.Name, types.StrategicMergePatchType, patch.Patch, nil)
 		if err != nil {
 			patchErrs = append(patchErrs, fmt.Errorf("failed to patch ServiceAccountName %v", err))

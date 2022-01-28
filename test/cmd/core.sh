@@ -52,6 +52,8 @@ run_configmap_tests() {
   kube::test::get_object_assert 'configmap/test-binary-configmap --namespace=test-configmaps' "{{$id_field}}" 'test-binary-configmap'
   grep -q "key1: value1" <<< "$(kubectl get configmap/test-configmap --namespace=test-configmaps -o yaml "${kube_flags[@]}")"
   grep -q "binaryData" <<< "$(kubectl get configmap/test-binary-configmap --namespace=test-configmaps -o yaml "${kube_flags[@]}")"
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert configmaps events "--namespace=test-configmaps"
   # Clean-up
   kubectl delete configmap test-configmap --namespace=test-configmaps
   kubectl delete configmap test-binary-configmap --namespace=test-configmaps
@@ -80,6 +82,9 @@ run_pod_tests() {
   kube::test::get_object_assert 'pod valid-pod' "{{$id_field}}" 'valid-pod'
   kube::test::get_object_assert 'pod/valid-pod' "{{$id_field}}" 'valid-pod'
   kube::test::get_object_assert 'pods/valid-pod' "{{$id_field}}" 'valid-pod'
+  # pod has field manager for kubectl create
+  output_message=$(kubectl get --show-managed-fields -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-create'
   # Repeat above test using jsonpath template
   kube::test::get_object_jsonpath_assert pods "{.items[*]$id_field}" 'valid-pod'
   kube::test::get_object_jsonpath_assert 'pod valid-pod' "{$id_field}" 'valid-pod'
@@ -102,8 +107,8 @@ run_pod_tests() {
   kube::test::describe_resource_events_assert pods false
   # Describe command should print events information when show-events=true
   kube::test::describe_resource_events_assert pods true
-  ### Validate Export ###
-  kube::test::get_object_assert 'pods/valid-pod' "{{.metadata.namespace}} {{.metadata.name}}" '<no value> valid-pod' "--export=true"
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert pods events
 
   ### Dump current valid-pod POD
   output_pod=$(kubectl get pod valid-pod -o yaml "${kube_flags[@]}")
@@ -256,6 +261,8 @@ run_pod_tests() {
   kubectl create pdb test-pdb-2 --selector=app=rails --min-available=50% --namespace=test-kubectl-describe-pod
   # Post-condition: pdb exists and has expected values
   kube::test::get_object_assert 'pdb/test-pdb-2 --namespace=test-kubectl-describe-pod' "{{$pdb_min_available}}" '50%'
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert poddisruptionbudgets events "--namespace=test-kubectl-describe-pod"
 
   ### Create a pod disruption budget with maxUnavailable
   # Command
@@ -294,6 +301,8 @@ run_pod_tests() {
   # Command
   kubectl create priorityclass test-priorityclass
   kube::test::get_object_assert 'priorityclasses' "{{range.items}}{{ if eq $id_field \\\"test-priorityclass\\\" }}found{{end}}{{end}}:" 'found:'
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert priorityclasses events
   kubectl delete priorityclass test-priorityclass
 
   ### Create two PODs
@@ -302,15 +311,15 @@ run_pod_tests() {
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
   kubectl create -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
-  kubectl create -f test/e2e/testing-manifests/kubectl/agnhost-master-pod.yaml "${kube_flags[@]}"
-  # Post-condition: valid-pod and agnhost-master PODs are created
-  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'agnhost-master:valid-pod:'
+  kubectl create -f test/e2e/testing-manifests/kubectl/agnhost-primary-pod.yaml "${kube_flags[@]}"
+  # Post-condition: valid-pod and agnhost-primary PODs are created
+  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'agnhost-primary:valid-pod:'
 
   ### Delete multiple PODs at once
-  # Pre-condition: valid-pod and agnhost-master PODs exist
-  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'agnhost-master:valid-pod:'
+  # Pre-condition: valid-pod and agnhost-primary PODs exist
+  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'agnhost-primary:valid-pod:'
   # Command
-  kubectl delete pods valid-pod agnhost-master "${kube_flags[@]}" --grace-period=0 --force # delete multiple pods at once
+  kubectl delete pods valid-pod agnhost-primary "${kube_flags[@]}" --grace-period=0 --force # delete multiple pods at once
   # Post-condition: no POD exists
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
 
@@ -364,6 +373,9 @@ run_pod_tests() {
   kubectl annotate pods valid-pod emptyannotation="" "${kube_flags[@]}"
   # Post-condition: valid pod contains "emptyannotation" with no value
   kube::test::get_object_assert 'pod valid-pod' "{{${annotations_field}.emptyannotation}}" ''
+  # pod has field for kubectl annotate field manager
+  output_message=$(kubectl get pod valid-pod -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-annotate'
 
   ### Record label change
   # Pre-condition: valid-pod does not have record annotation
@@ -372,6 +384,9 @@ run_pod_tests() {
   kubectl label pods valid-pod record-change=true --record=true "${kube_flags[@]}"
   # Post-condition: valid-pod has record annotation
   kube::test::get_object_assert 'pod valid-pod' "{{range$annotations_field}}{{.}}:{{end}}" ".*--record=true.*"
+  # pod has field for kubectl label field manager
+  output_message=$(kubectl get pod valid-pod -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-label'
 
   ### Do not record label change
   # Command
@@ -451,6 +466,11 @@ run_pod_tests() {
   # Post-condition: service named modified and rc named modified are created
   kube::test::get_object_assert service "{{range.items}}{{$id_field}}:{{end}}" 'modified:'
   kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" 'modified:'
+  # resources have field manager for kubectl create
+  output_message=$(kubectl get service/modified -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-create'
+  output_message=$(kubectl get rc/modified -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-create'
   # Clean up
   kubectl delete service/modified "${kube_flags[@]}"
   kubectl delete rc/modified "${kube_flags[@]}"
@@ -517,9 +537,13 @@ run_pod_tests() {
   kube::test::get_object_assert pods "{{range.items}}{{$image_field}}:{{end}}" 'changed-with-yaml:'
   ## Patch pod from JSON can change image
   # Command
-  kubectl patch "${kube_flags[@]}" -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml -p='{"spec":{"containers":[{"name": "kubernetes-serve-hostname", "image": "k8s.gcr.io/pause:3.2"}]}}'
+  kubectl patch "${kube_flags[@]}" -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml -p='{"spec":{"containers":[{"name": "kubernetes-serve-hostname", "image": "k8s.gcr.io/pause:3.6"}]}}'
   # Post-condition: valid-pod POD has expected image
-  kube::test::get_object_assert pods "{{range.items}}{{$image_field}}:{{end}}" 'k8s.gcr.io/pause:3.2:'
+  kube::test::get_object_assert pods "{{range.items}}{{$image_field}}:{{end}}" 'k8s.gcr.io/pause:3.6:'
+
+  # pod has field for kubectl patch field manager
+  output_message=$(kubectl get pod valid-pod -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-patch'
 
   ## If resourceVersion is specified in the patch, it will be treated as a precondition, i.e., if the resourceVersion is different from that is stored in the server, the Patch should be rejected
   ERROR_FILE="${KUBE_TEMP}/conflict-error"
@@ -544,7 +568,7 @@ run_pod_tests() {
   resourceVersion=$(kubectl get "${kube_flags[@]}" pod valid-pod -o go-template='{{ .metadata.resourceVersion }}')
   ((resourceVersion+=100))
   # Command
-  kubectl patch "${kube_flags[@]}" pod valid-pod -p='{"spec":{"containers":[{"name": "kubernetes-serve-hostname", "image": "nginx"}]},"metadata":{"resourceVersion":"'$resourceVersion'"}}' 2> "${ERROR_FILE}" || true
+  kubectl patch "${kube_flags[@]}" pod valid-pod -p='{"spec":{"containers":[{"name": "kubernetes-serve-hostname", "image": "nginx"}]},"metadata":{"resourceVersion":"'"$resourceVersion"'"}}' 2> "${ERROR_FILE}" || true
   # Post-condition: should get an error reporting the conflict
   if grep -q "please apply your changes to the latest version and try again" "${ERROR_FILE}"; then
     kube::log::status "\"kubectl patch with resourceVersion $resourceVersion\" returns error as expected: $(cat "${ERROR_FILE}")"
@@ -560,6 +584,10 @@ run_pod_tests() {
   kubectl replace "${kube_flags[@]}" --force -f /tmp/tmp-valid-pod.json
   # Post-condition: spec.container.name = "replaced-k8s-serve-hostname"
   kube::test::get_object_assert 'pod valid-pod' "{{(index .spec.containers 0).name}}" 'replaced-k8s-serve-hostname'
+
+  # Pod has field manager for kubectl replace
+  output_message=$(kubectl get pod valid-pod -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-replace'
 
   ## check replace --grace-period requires --force
   output_message=$(! kubectl replace "${kube_flags[@]}" --grace-period=1 -f /tmp/tmp-valid-pod.json 2>&1)
@@ -635,6 +663,9 @@ __EOF__
   grep -q 'Patch:' <<< "$(EDITOR=/tmp/tmp-editor.sh kubectl edit "${kube_flags[@]}" pods/valid-pod --output-patch=true)"
   # Post-condition: valid-pod POD has image k8s.gcr.io/serve_hostname
   kube::test::get_object_assert pods "{{range.items}}{{$image_field}}:{{end}}" 'k8s.gcr.io/serve_hostname:'
+  # pod has field for kubectl edit field manager
+  output_message=$(kubectl get pod valid-pod -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-edit'
   # cleaning
   rm /tmp/tmp-editor.sh
 
@@ -812,6 +843,8 @@ run_secrets_test() {
   kube::test::get_object_assert 'secret/test-secret --namespace=test-secrets' "{{$id_field}}" 'test-secret'
   kube::test::get_object_assert 'secret/test-secret --namespace=test-secrets' "{{$secret_type}}" 'test-type'
   grep -q 'key1: dmFsdWUx' <<< "$(kubectl get secret/test-secret --namespace=test-secrets -o yaml "${kube_flags[@]}")"
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert secrets ""  "--namespace=test-secrets"
   # Clean-up
   kubectl delete secret test-secret --namespace=test-secrets
 
@@ -827,6 +860,21 @@ run_secrets_test() {
   kube::test::get_object_assert 'secret/test-secret --namespace=test-secrets' "{{$id_field}}" 'test-secret'
   kube::test::get_object_assert 'secret/test-secret --namespace=test-secrets' "{{$secret_type}}" 'kubernetes.io/dockerconfigjson'
   grep -q '.dockerconfigjson: eyJhdXRocyI6eyJodHRwczovL2luZGV4LmRvY2tlci5pby92MS8iOnsidXNlcm5hbWUiOiJ0ZXN0LXVzZXIiLCJwYXNzd29yZCI6InRlc3QtcGFzc3dvcmQiLCJlbWFpbCI6InRlc3QtdXNlckB0ZXN0LmNvbSIsImF1dGgiOiJkR1Z6ZEMxMWMyVnlPblJsYzNRdGNHRnpjM2R2Y21RPSJ9fX0=' <<< "$(kubectl get secret/test-secret --namespace=test-secrets -o yaml "${kube_flags[@]}")"
+  # Clean-up
+  kubectl delete secret test-secret --namespace=test-secrets
+
+  ### Create a docker-registry secret in a specific namespace with docker config file
+  if [[ "${WAIT_FOR_DELETION:-}" == "true" ]]; then
+    kube::test::wait_object_assert 'secrets --namespace=test-secrets' "{{range.items}}{{$id_field}}:{{end}}" ''
+  fi
+  # Pre-condition: no SECRET exists
+  kube::test::get_object_assert 'secrets --namespace=test-secrets' "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command
+  kubectl create secret docker-registry test-secret --from-file=.dockerconfigjson=hack/testdata/dockerconfig.json --namespace=test-secrets
+  # Post-condition: secret exists and has expected values
+  kube::test::get_object_assert 'secret/test-secret --namespace=test-secrets' "{{$id_field}}" 'test-secret'
+  kube::test::get_object_assert 'secret/test-secret --namespace=test-secrets' "{{$secret_type}}" 'kubernetes.io/dockerconfigjson'
+  grep -q '.dockerconfigjson: ewogICAgImF1dGhzIjp7CiAgICAgICAgImh0dHA6Ly9mb28uZXhhbXBsZS5jb20iOnsKICAgICAgICAgICAgInVzZXJuYW1lIjoiZm9vIiwKICAgICAgICAgICAgInBhc3N3b3JkIjoiYmFyIiwKICAgICAgICAgICAgImVtYWlsIjoiZm9vQGV4YW1wbGUuY29tIgogICAgICAgIH0sCiAgICAgICAgImh0dHA6Ly9iYXIuZXhhbXBsZS5jb20iOnsKICAgICAgICAgICAgInVzZXJuYW1lIjoiYmFyIiwKICAgICAgICAgICAgInBhc3N3b3JkIjoiYmF6IiwKICAgICAgICAgICAgImVtYWlsIjoiYmFyQGV4YW1wbGUuY29tIgogICAgICAgIH0KICAgIH0KfQo=' <<< "$(kubectl get secret/test-secret --namespace=test-secrets -o yaml "${kube_flags[@]}")"
   # Clean-up
   kubectl delete secret test-secret --namespace=test-secrets
 
@@ -917,6 +965,8 @@ run_service_accounts_tests() {
   kubectl create serviceaccount test-service-account --namespace=test-service-accounts
   # Post-condition: secret exists and has expected values
   kube::test::get_object_assert 'serviceaccount/test-service-account --namespace=test-service-accounts' "{{$id_field}}" 'test-service-account'
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert serviceaccounts secrets,events "--namespace=test-service-accounts"
   # Clean-up
   kubectl delete serviceaccount test-service-account --namespace=test-service-accounts
   # Clean up
@@ -957,6 +1007,8 @@ run_service_tests() {
   kube::test::describe_resource_events_assert services false
   # Describe command should print events information when show-events=true
   kube::test::describe_resource_events_assert services true
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert services events
 
   ### set selector
   # prove role=master
@@ -976,6 +1028,8 @@ run_service_tests() {
   # Show dry-run works on running selector
   kubectl set selector services redis-master role=padawan --dry-run=client -o yaml "${kube_flags[@]}"
   kubectl set selector services redis-master role=padawan --dry-run=server -o yaml "${kube_flags[@]}"
+  output_message=$(kubectl get services redis-master --show-managed-fields -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-set'
   ! kubectl set selector services redis-master role=padawan --local -o yaml "${kube_flags[@]}" || exit 1
   kube::test::get_object_assert 'services redis-master' "{{range$service_selector_field}}{{.}}:{{end}}" "redis:master:backend:"
   # --resource-version=<current-resource-version> succeeds
@@ -1102,21 +1156,27 @@ __EOF__
   # Pre-condition: Only the default kubernetes services exist
   kube::test::get_object_assert services "{{range.items}}{{$id_field}}:{{end}}" 'kubernetes:'
   # Dry-run command
-  kubectl run testmetadata --image=nginx --port=80 --expose --dry-run=client --service-overrides='{ "metadata": { "annotations": { "zone-context": "home" } } } '
-  kubectl run testmetadata --image=nginx --port=80 --expose --dry-run=server --service-overrides='{ "metadata": { "annotations": { "zone-context": "home" } } } '
+  kubectl run testmetadata --image=nginx --port=80 --expose --dry-run=client
+  kubectl run testmetadata --image=nginx --port=80 --expose --dry-run=server
   # Check only the default kubernetes services exist
   kube::test::get_object_assert services "{{range.items}}{{$id_field}}:{{end}}" 'kubernetes:'
   # Command
-  kubectl run testmetadata --image=nginx --port=80 --expose --service-overrides='{ "metadata": { "annotations": { "zone-context": "home" } } } '
+  kubectl run testmetadata --image=nginx --port=80 --expose
   # Check result
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'testmetadata:'
-  kube::test::get_object_assert 'service testmetadata' "{{.metadata.annotations}}" "map\[zone-context:home\]"
+  kube::test::get_object_assert 'service testmetadata' "{{${port_field:?}}}" '80'
+  # pod has field for kubectl run field manager
+  output_message=$(kubectl get pod testmetadata -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-run'
 
   ### Expose pod as a new service
   # Command
   kubectl expose pod testmetadata  --port=1000 --target-port=80 --type=NodePort --name=exposemetadata --overrides='{ "metadata": { "annotations": { "zone-context": "work" } } } '
   # Check result
   kube::test::get_object_assert 'service exposemetadata' "{{.metadata.annotations}}" "map\[zone-context:work\]"
+  # Service has field manager for kubectl expose
+  output_message=$(kubectl get service exposemetadata -o=jsonpath='{.metadata.managedFields[*].manager}' "${kube_flags[@]:?}" 2>&1)
+  kube::test::if_has_string "${output_message}" 'kubectl-expose'
 
   # Clean-Up
   # Command
@@ -1172,6 +1232,8 @@ run_rc_tests() {
   kube::test::describe_resource_events_assert rc false
   # Describe command should print events information when show-events=true
   kube::test::describe_resource_events_assert rc true
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert replicationcontrollers events
 
   ### Scale replication controller frontend with current-replicas and replicas
   # Pre-condition: 3 replicas
@@ -1267,17 +1329,13 @@ run_rc_tests() {
   kubectl expose pod valid-pod --port=444 --name=frontend-3 "${kube_flags[@]}"
   # Post-condition: service exists and the port is unnamed
   kube::test::get_object_assert 'service frontend-3' "{{$port_name}} {{$port_field}}" '<no value> 444'
-  # Create a service using service/v1 generator
-  kubectl expose rc frontend --port=80 --name=frontend-4 --generator=service/v1 "${kube_flags[@]}"
-  # Post-condition: service exists and the port is named default.
-  kube::test::get_object_assert 'service frontend-4' "{{$port_name}} {{$port_field}}" 'default 80'
   # Verify that expose service works without specifying a port.
-  kubectl expose service frontend --name=frontend-5 "${kube_flags[@]}"
+  kubectl expose service frontend --name=frontend-4 "${kube_flags[@]}"
   # Post-condition: service exists with the same port as the original service.
-  kube::test::get_object_assert 'service frontend-5' "{{$port_field}}" '80'
+  kube::test::get_object_assert 'service frontend-4' "{{$port_field}}" '80'
   # Cleanup services
   kubectl delete pod valid-pod "${kube_flags[@]}"
-  kubectl delete service frontend{,-2,-3,-4,-5} "${kube_flags[@]}"
+  kubectl delete service frontend{,-2,-3,-4} "${kube_flags[@]}"
 
   ### Expose negative invalid resource test
   # Pre-condition: don't need
@@ -1411,6 +1469,8 @@ run_namespace_tests() {
   kubectl create namespace my-namespace
   # Post-condition: namespace 'my-namespace' is created.
   kube::test::get_object_assert 'namespaces/my-namespace' "{{$id_field}}" 'my-namespace'
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert namespaces resourcequotas,limitranges
   # Clean up
   kubectl delete namespace my-namespace --wait=false
   # make sure that wait properly waits for finalization
@@ -1435,6 +1495,8 @@ run_namespace_tests() {
   # Command
   kubectl create quota test-quota --namespace=quotas
   kube::test::get_object_assert 'quota --namespace=quotas' "{{range.items}}{{ if eq $id_field \\\"test-quota\\\" }}found{{end}}{{end}}:" 'found:'
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert resourcequotas "" "--namespace=quotas"
   # Clean up
   kubectl delete quota test-quota --namespace=quotas
   kubectl delete namespace quotas
@@ -1503,6 +1565,8 @@ run_nodes_tests() {
   kube::test::describe_resource_events_assert nodes false
   # Describe command should print events information when show-events=true
   kube::test::describe_resource_events_assert nodes true
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert nodes pods,events
 
   ### kubectl patch update can mark node unschedulable
   # Pre-condition: node is schedulable
@@ -1516,7 +1580,6 @@ run_nodes_tests() {
 
   # check webhook token authentication endpoint, kubectl doesn't actually display the returned object so this isn't super useful
   # but it proves that works
-  kubectl create -f test/fixtures/pkg/kubectl/cmd/create/tokenreview-v1beta1.json --validate=false
   kubectl create -f test/fixtures/pkg/kubectl/cmd/create/tokenreview-v1.json --validate=false
 
   set +o nounset
@@ -1545,6 +1608,8 @@ run_pod_templates_tests() {
   ### Delete nginx pod template by name
   # Pre-condition: nginx pod template is available
   kube::test::get_object_assert podtemplates "{{range.items}}{{.metadata.name}}:{{end}}" 'nginx:'
+  # Describe command should respect the chunk size parameter
+  kube::test::describe_resource_chunk_size_assert podtemplates events
   # Command
   kubectl delete podtemplate nginx "${kube_flags[@]}"
   # Post-condition: No templates exist

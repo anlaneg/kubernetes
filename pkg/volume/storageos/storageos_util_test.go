@@ -22,7 +22,7 @@ import (
 	"testing"
 
 	storageostypes "github.com/storageos/go-api/types"
-	"k8s.io/utils/mount"
+	"k8s.io/mount-utils"
 
 	v1 "k8s.io/api/core/v1"
 	utiltesting "k8s.io/client-go/util/testing"
@@ -39,14 +39,7 @@ var testPool = "testpool"
 var testFSType = "ext2"
 var testVolUUID = "01c43d34-89f8-83d3-422b-43536a0f25e6"
 
-type fakeConfig struct {
-	apiAddr    string
-	apiUser    string
-	apiPass    string
-	apiVersion string
-}
-
-func (c fakeConfig) GetAPIConfig() *storageosAPIConfig {
+func GetAPIConfig() *storageosAPIConfig {
 	return &storageosAPIConfig{
 		apiAddr:    "http://5.6.7.8:9999",
 		apiUser:    "abc",
@@ -56,9 +49,12 @@ func (c fakeConfig) GetAPIConfig() *storageosAPIConfig {
 }
 
 func TestClient(t *testing.T) {
-	util := storageosUtil{}
-	cfg := fakeConfig{}
-	err := util.NewAPI(cfg.GetAPIConfig())
+	tmpDir, err := utiltesting.MkTmpdir("storageos_test")
+	if err != nil {
+		t.Fatalf("error creating tmpdir: %v", err)
+	}
+	util := storageosUtil{host: volumetest.NewFakeVolumeHost(t, tmpDir, nil, nil)}
+	err = util.NewAPI(GetAPIConfig())
 	if err != nil {
 		t.Fatalf("error getting api config: %v", err)
 	}

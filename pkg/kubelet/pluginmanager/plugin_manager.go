@@ -21,7 +21,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/kubelet/config"
 	"k8s.io/kubernetes/pkg/kubelet/pluginmanager/cache"
 	"k8s.io/kubernetes/pkg/kubelet/pluginmanager/metrics"
@@ -109,14 +109,14 @@ func (pm *pluginManager) Run(sourcesReady config.SourcesReady, stopCh <-chan str
 	defer runtime.HandleCrash()
 
 	pm.desiredStateOfWorldPopulator.Start(stopCh)
-	klog.V(2).Infof("The desired_state_of_world populator (plugin watcher) starts")
+	klog.V(2).InfoS("The desired_state_of_world populator (plugin watcher) starts")
 
-	klog.Infof("Starting Kubelet Plugin Manager")
+	klog.InfoS("Starting Kubelet Plugin Manager")
 	go pm.reconciler.Run(stopCh)
 
 	metrics.Register(pm.actualStateOfWorld, pm.desiredStateOfWorld)
 	<-stopCh
-	klog.Infof("Shutting down Kubelet Plugin Manager")
+	klog.InfoS("Shutting down Kubelet Plugin Manager")
 }
 
 func (pm *pluginManager) AddHandler(pluginType string, handler cache.PluginHandler) {

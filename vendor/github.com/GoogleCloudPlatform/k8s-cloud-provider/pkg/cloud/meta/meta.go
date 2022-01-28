@@ -42,6 +42,8 @@ const (
 	CustomOps = 1 << iota
 	// AggregatedList will generated a method for AggregatedList().
 	AggregatedList = 1 << iota
+	// ListUsable will generate a method for ListUsable().
+	ListUsable = 1 << iota
 
 	// ReadOnly specifies that the given resource is read-only and should not
 	// have insert() or delete() methods generated for the wrapper.
@@ -103,6 +105,14 @@ var AllServices = []*ServiceInfo{
 		Object:      "Address",
 		Service:     "GlobalAddresses",
 		Resource:    "addresses",
+		version:     VersionBeta,
+		keyType:     Global,
+		serviceType: reflect.TypeOf(&beta.GlobalAddressesService{}),
+	},
+	{
+		Object:      "Address",
+		Service:     "GlobalAddresses",
+		Resource:    "addresses",
 		keyType:     Global,
 		serviceType: reflect.TypeOf(&ga.GlobalAddressesService{}),
 	},
@@ -116,7 +126,9 @@ var AllServices = []*ServiceInfo{
 			"GetHealth",
 			"Patch",
 			"Update",
+			"SetSecurityPolicy",
 		},
+		options: AggregatedList,
 	},
 	{
 		Object:      "BackendService",
@@ -129,6 +141,7 @@ var AllServices = []*ServiceInfo{
 			"Update",
 			"SetSecurityPolicy",
 		},
+		options: AggregatedList,
 	},
 	{
 		Object:      "BackendService",
@@ -141,6 +154,7 @@ var AllServices = []*ServiceInfo{
 			"Update",
 			"SetSecurityPolicy",
 		},
+		options: AggregatedList,
 	},
 	{
 		Object:      "BackendService",
@@ -197,6 +211,28 @@ var AllServices = []*ServiceInfo{
 		serviceType: reflect.TypeOf(&ga.RegionDisksService{}),
 		additionalMethods: []string{
 			"Resize",
+		},
+	},
+	{
+		Object:      "Firewall",
+		Service:     "Firewalls",
+		Resource:    "firewalls",
+		version:     VersionAlpha,
+		keyType:     Global,
+		serviceType: reflect.TypeOf(&alpha.FirewallsService{}),
+		additionalMethods: []string{
+			"Update",
+		},
+	},
+	{
+		Object:      "Firewall",
+		Service:     "Firewalls",
+		Resource:    "firewalls",
+		version:     VersionBeta,
+		keyType:     Global,
+		serviceType: reflect.TypeOf(&beta.FirewallsService{}),
+		additionalMethods: []string{
+			"Update",
 		},
 	},
 	{
@@ -323,6 +359,17 @@ var AllServices = []*ServiceInfo{
 		version:     VersionBeta,
 		keyType:     Regional,
 		serviceType: reflect.TypeOf(&beta.RegionHealthChecksService{}),
+		additionalMethods: []string{
+			"Update",
+		},
+	},
+	{
+		Object:      "HealthCheck",
+		Service:     "RegionHealthChecks",
+		Resource:    "healthChecks",
+		version:     VersionGA,
+		keyType:     Regional,
+		serviceType: reflect.TypeOf(&ga.RegionHealthChecksService{}),
 		additionalMethods: []string{
 			"Update",
 		},
@@ -481,6 +528,50 @@ var AllServices = []*ServiceInfo{
 		serviceType: reflect.TypeOf(&ga.RegionsService{}),
 	},
 	{
+		Object:      "Router",
+		Service:     "Routers",
+		Resource:    "routers",
+		keyType:     Regional,
+		version:     VersionAlpha,
+		options:     AggregatedList,
+		serviceType: reflect.TypeOf(&alpha.RoutersService{}),
+		additionalMethods: []string{
+			"Patch",
+			"Preview",
+			"GetRouterStatus",
+			"TestIamPermissions",
+		},
+	},
+	{
+		Object:      "Router",
+		Service:     "Routers",
+		Resource:    "routers",
+		keyType:     Regional,
+		version:     VersionBeta,
+		options:     AggregatedList,
+		serviceType: reflect.TypeOf(&beta.RoutersService{}),
+		additionalMethods: []string{
+			"Patch",
+			"Preview",
+			"GetRouterStatus",
+			"TestIamPermissions",
+		},
+	},
+	{
+		Object:      "Router",
+		Service:     "Routers",
+		Resource:    "routers",
+		keyType:     Regional,
+		version:     VersionGA,
+		options:     AggregatedList,
+		serviceType: reflect.TypeOf(&ga.RoutersService{}),
+		additionalMethods: []string{
+			"Patch",
+			"Preview",
+			"GetRouterStatus",
+		},
+	},
+	{
 		Object:      "Route",
 		Service:     "Routes",
 		Resource:    "routes",
@@ -500,6 +591,28 @@ var AllServices = []*ServiceInfo{
 			"Patch",
 			"PatchRule",
 			"RemoveRule",
+		},
+	},
+	{
+		Object:      "ServiceAttachment",
+		Service:     "ServiceAttachments",
+		Resource:    "serviceAttachments",
+		version:     VersionBeta,
+		keyType:     Regional,
+		serviceType: reflect.TypeOf(&beta.ServiceAttachmentsService{}),
+		additionalMethods: []string{
+			"Patch",
+		},
+	},
+	{
+		Object:      "ServiceAttachment",
+		Service:     "ServiceAttachments",
+		Resource:    "serviceAttachments",
+		version:     VersionAlpha,
+		keyType:     Regional,
+		serviceType: reflect.TypeOf(&alpha.ServiceAttachmentsService{}),
+		additionalMethods: []string{
+			"Patch",
 		},
 	},
 	{
@@ -542,12 +655,29 @@ var AllServices = []*ServiceInfo{
 		serviceType: reflect.TypeOf(&beta.RegionSslCertificatesService{}),
 	},
 	{
+		Object:      "SslCertificate",
+		Service:     "RegionSslCertificates",
+		Resource:    "sslCertificates",
+		version:     VersionGA,
+		keyType:     Regional,
+		serviceType: reflect.TypeOf(&ga.RegionSslCertificatesService{}),
+	},
+	{
+		Object:      "SslPolicy",
+		Service:     "SslPolicies",
+		Resource:    "sslPolicies",
+		keyType:     Global,
+		serviceType: reflect.TypeOf(&ga.SslPoliciesService{}),
+		options:     NoList, // List() naming convention is different in GCE API for this resource
+	},
+	{
 		Object:      "Subnetwork",
 		Service:     "Subnetworks",
 		Resource:    "subnetworks",
 		version:     VersionAlpha,
 		keyType:     Regional,
 		serviceType: reflect.TypeOf(&alpha.SubnetworksService{}),
+		options:     ListUsable,
 	},
 	{
 		Object:      "Subnetwork",
@@ -556,6 +686,7 @@ var AllServices = []*ServiceInfo{
 		version:     VersionBeta,
 		keyType:     Regional,
 		serviceType: reflect.TypeOf(&alpha.SubnetworksService{}),
+		options:     ListUsable,
 	},
 	{
 		Object:      "Subnetwork",
@@ -564,6 +695,7 @@ var AllServices = []*ServiceInfo{
 		version:     VersionGA,
 		keyType:     Regional,
 		serviceType: reflect.TypeOf(&alpha.SubnetworksService{}),
+		options:     ListUsable,
 	},
 	{
 		Object:      "TargetHttpProxy",
@@ -620,6 +752,17 @@ var AllServices = []*ServiceInfo{
 		},
 	},
 	{
+		Object:      "TargetHttpProxy",
+		Service:     "RegionTargetHttpProxies",
+		Resource:    "targetHttpProxies",
+		version:     VersionGA,
+		keyType:     Regional,
+		serviceType: reflect.TypeOf(&ga.RegionTargetHttpProxiesService{}),
+		additionalMethods: []string{
+			"SetUrlMap",
+		},
+	},
+	{
 		Object:      "TargetHttpsProxy",
 		Service:     "TargetHttpsProxies",
 		Resource:    "targetHttpsProxies",
@@ -627,6 +770,7 @@ var AllServices = []*ServiceInfo{
 		serviceType: reflect.TypeOf(&ga.TargetHttpsProxiesService{}),
 		additionalMethods: []string{
 			"SetSslCertificates",
+			"SetSslPolicy",
 			"SetUrlMap",
 		},
 	},
@@ -638,7 +782,9 @@ var AllServices = []*ServiceInfo{
 		keyType:     Global,
 		serviceType: reflect.TypeOf(&alpha.TargetHttpsProxiesService{}),
 		additionalMethods: []string{
+			"SetCertificateMap",
 			"SetSslCertificates",
+			"SetSslPolicy",
 			"SetUrlMap",
 		},
 	},
@@ -651,6 +797,7 @@ var AllServices = []*ServiceInfo{
 		serviceType: reflect.TypeOf(&beta.TargetHttpsProxiesService{}),
 		additionalMethods: []string{
 			"SetSslCertificates",
+			"SetSslPolicy",
 			"SetUrlMap",
 		},
 	},
@@ -679,6 +826,18 @@ var AllServices = []*ServiceInfo{
 		},
 	},
 	{
+		Object:      "TargetHttpsProxy",
+		Service:     "RegionTargetHttpsProxies",
+		Resource:    "targetHttpsProxies",
+		version:     VersionGA,
+		keyType:     Regional,
+		serviceType: reflect.TypeOf(&ga.RegionTargetHttpsProxiesService{}),
+		additionalMethods: []string{
+			"SetSslCertificates",
+			"SetUrlMap",
+		},
+	},
+	{
 		Object:      "TargetPool",
 		Service:     "TargetPools",
 		Resource:    "targetPools",
@@ -687,6 +846,28 @@ var AllServices = []*ServiceInfo{
 		additionalMethods: []string{
 			"AddInstance",
 			"RemoveInstance",
+		},
+	},
+	{
+		Object:      "TargetTcpProxy",
+		Service:     "TargetTcpProxies",
+		Resource:    "targetTcpProxies",
+		version:     VersionAlpha,
+		keyType:     Global,
+		serviceType: reflect.TypeOf(&alpha.TargetTcpProxiesService{}),
+		additionalMethods: []string{
+			"SetBackendService",
+		},
+	},
+	{
+		Object:      "TargetTcpProxy",
+		Service:     "TargetTcpProxies",
+		Resource:    "targetTcpProxies",
+		version:     VersionBeta,
+		keyType:     Global,
+		serviceType: reflect.TypeOf(&beta.TargetTcpProxiesService{}),
+		additionalMethods: []string{
+			"SetBackendService",
 		},
 	},
 	{
@@ -739,6 +920,17 @@ var AllServices = []*ServiceInfo{
 		version:     VersionBeta,
 		keyType:     Regional,
 		serviceType: reflect.TypeOf(&beta.RegionUrlMapsService{}),
+		additionalMethods: []string{
+			"Update",
+		},
+	},
+	{
+		Object:      "UrlMap",
+		Service:     "RegionUrlMaps",
+		Resource:    "urlMaps",
+		version:     VersionGA,
+		keyType:     Regional,
+		serviceType: reflect.TypeOf(&ga.RegionUrlMapsService{}),
 		additionalMethods: []string{
 			"Update",
 		},

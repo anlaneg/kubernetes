@@ -18,6 +18,7 @@ package nodeports
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -25,8 +26,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/diff"
-	framework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 func newPod(host string, hostPortInfos ...string) *v1.Pod {
@@ -56,91 +56,91 @@ func newPod(host string, hostPortInfos ...string) *v1.Pod {
 func TestNodePorts(t *testing.T) {
 	tests := []struct {
 		pod        *v1.Pod
-		nodeInfo   *schedulernodeinfo.NodeInfo
+		nodeInfo   *framework.NodeInfo
 		name       string
 		wantStatus *framework.Status
 	}{
 		{
 			pod:      &v1.Pod{},
-			nodeInfo: schedulernodeinfo.NewNodeInfo(),
+			nodeInfo: framework.NewNodeInfo(),
 			name:     "nothing running",
 		},
 		{
 			pod: newPod("m1", "UDP/127.0.0.1/8080"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "UDP/127.0.0.1/9090")),
 			name: "other port",
 		},
 		{
 			pod: newPod("m1", "UDP/127.0.0.1/8080"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "UDP/127.0.0.1/8080")),
 			name:       "same udp port",
 			wantStatus: framework.NewStatus(framework.Unschedulable, ErrReason),
 		},
 		{
 			pod: newPod("m1", "TCP/127.0.0.1/8080"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "TCP/127.0.0.1/8080")),
 			name:       "same tcp port",
 			wantStatus: framework.NewStatus(framework.Unschedulable, ErrReason),
 		},
 		{
 			pod: newPod("m1", "TCP/127.0.0.1/8080"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "TCP/127.0.0.2/8080")),
 			name: "different host ip",
 		},
 		{
 			pod: newPod("m1", "UDP/127.0.0.1/8080"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "TCP/127.0.0.1/8080")),
 			name: "different protocol",
 		},
 		{
 			pod: newPod("m1", "UDP/127.0.0.1/8000", "UDP/127.0.0.1/8080"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "UDP/127.0.0.1/8080")),
 			name:       "second udp port conflict",
 			wantStatus: framework.NewStatus(framework.Unschedulable, ErrReason),
 		},
 		{
 			pod: newPod("m1", "TCP/127.0.0.1/8001", "UDP/127.0.0.1/8080"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "TCP/127.0.0.1/8001", "UDP/127.0.0.1/8081")),
 			name:       "first tcp port conflict",
 			wantStatus: framework.NewStatus(framework.Unschedulable, ErrReason),
 		},
 		{
 			pod: newPod("m1", "TCP/0.0.0.0/8001"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "TCP/127.0.0.1/8001")),
 			name:       "first tcp port conflict due to 0.0.0.0 hostIP",
 			wantStatus: framework.NewStatus(framework.Unschedulable, ErrReason),
 		},
 		{
 			pod: newPod("m1", "TCP/10.0.10.10/8001", "TCP/0.0.0.0/8001"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "TCP/127.0.0.1/8001")),
 			name:       "TCP hostPort conflict due to 0.0.0.0 hostIP",
 			wantStatus: framework.NewStatus(framework.Unschedulable, ErrReason),
 		},
 		{
 			pod: newPod("m1", "TCP/127.0.0.1/8001"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "TCP/0.0.0.0/8001")),
 			name:       "second tcp port conflict to 0.0.0.0 hostIP",
 			wantStatus: framework.NewStatus(framework.Unschedulable, ErrReason),
 		},
 		{
 			pod: newPod("m1", "UDP/127.0.0.1/8001"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "TCP/0.0.0.0/8001")),
 			name: "second different protocol",
 		},
 		{
 			pod: newPod("m1", "UDP/127.0.0.1/8001"),
-			nodeInfo: schedulernodeinfo.NewNodeInfo(
+			nodeInfo: framework.NewNodeInfo(
 				newPod("m1", "TCP/0.0.0.0/8001", "UDP/0.0.0.0/8001")),
 			name:       "UDP hostPort conflict due to 0.0.0.0 hostIP",
 			wantStatus: framework.NewStatus(framework.Unschedulable, ErrReason),
@@ -165,13 +165,13 @@ func TestNodePorts(t *testing.T) {
 
 func TestPreFilterDisabled(t *testing.T) {
 	pod := &v1.Pod{}
-	nodeInfo := schedulernodeinfo.NewNodeInfo()
+	nodeInfo := framework.NewNodeInfo()
 	node := v1.Node{}
 	nodeInfo.SetNode(&node)
 	p, _ := New(nil, nil)
 	cycleState := framework.NewCycleState()
 	gotStatus := p.(framework.FilterPlugin).Filter(context.Background(), cycleState, pod, nodeInfo)
-	wantStatus := framework.NewStatus(framework.Error, `error reading "PreFilterNodePorts" from cycleState: not found`)
+	wantStatus := framework.AsStatus(fmt.Errorf(`reading "PreFilterNodePorts" from cycleState: %w`, fmt.Errorf("not found")))
 	if !reflect.DeepEqual(gotStatus, wantStatus) {
 		t.Errorf("status does not match: %v, want: %v", gotStatus, wantStatus)
 	}
@@ -281,10 +281,12 @@ func TestGetContainerPorts(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
-		result := getContainerPorts(test.pod1, test.pod2)
-		if !reflect.DeepEqual(test.expected, result) {
-			t.Errorf("Got different result than expected.\nDifference detected on:\n%s", diff.ObjectGoPrintSideBySide(test.expected, result))
-		}
+	for i, test := range tests {
+		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+			result := getContainerPorts(test.pod1, test.pod2)
+			if !reflect.DeepEqual(test.expected, result) {
+				t.Errorf("Got different result than expected.\nDifference detected on:\n%s", diff.ObjectGoPrintSideBySide(test.expected, result))
+			}
+		})
 	}
 }

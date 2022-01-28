@@ -17,19 +17,19 @@ limitations under the License.
 package state
 
 import (
+	"io/ioutil"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
-	"k8s.io/kubernetes/pkg/kubelet/cm/cpumanager/containermap"
+	"k8s.io/kubernetes/pkg/kubelet/cm/containermap"
 	testutil "k8s.io/kubernetes/pkg/kubelet/cm/cpumanager/state/testing"
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpuset"
 )
 
 const testingCheckpoint = "cpumanager_checkpoint_test"
-
-var testingDir = os.TempDir()
 
 func TestCheckpointStateRestore(t *testing.T) {
 	testCases := []struct {
@@ -199,6 +199,12 @@ func TestCheckpointStateRestore(t *testing.T) {
 		},
 	}
 
+	// create temp dir
+	testingDir, err := ioutil.TempDir("", "cpumanager_state_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(testingDir)
 	// create checkpoint manager for testing
 	cpm, err := checkpointmanager.NewCheckpointManager(testingDir)
 	if err != nil {
@@ -221,8 +227,8 @@ func TestCheckpointStateRestore(t *testing.T) {
 			restoredState, err := NewCheckpointState(testingDir, testingCheckpoint, tc.policyName, tc.initialContainers)
 			if err != nil {
 				if strings.TrimSpace(tc.expectedError) != "" {
-					tc.expectedError = "could not restore state from checkpoint: " + tc.expectedError
-					if strings.HasPrefix(err.Error(), tc.expectedError) {
+					if strings.Contains(err.Error(), "could not restore state from checkpoint") &&
+						strings.Contains(err.Error(), tc.expectedError) {
 						t.Logf("got expected error: %v", err)
 						return
 					}
@@ -256,6 +262,13 @@ func TestCheckpointStateStore(t *testing.T) {
 			},
 		},
 	}
+
+	// create temp dir
+	testingDir, err := ioutil.TempDir("", "cpumanager_state_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(testingDir)
 
 	cpm, err := checkpointmanager.NewCheckpointManager(testingDir)
 	if err != nil {
@@ -323,6 +336,13 @@ func TestCheckpointStateHelpers(t *testing.T) {
 		},
 	}
 
+	// create temp dir
+	testingDir, err := ioutil.TempDir("", "cpumanager_state_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(testingDir)
+
 	cpm, err := checkpointmanager.NewCheckpointManager(testingDir)
 	if err != nil {
 		t.Fatalf("could not create testing checkpoint manager: %v", err)
@@ -375,6 +395,13 @@ func TestCheckpointStateClear(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
+			// create temp dir
+			testingDir, err := ioutil.TempDir("", "cpumanager_state_test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(testingDir)
+
 			state, err := NewCheckpointState(testingDir, testingCheckpoint, "none", nil)
 			if err != nil {
 				t.Fatalf("could not create testing checkpointState instance: %v", err)
@@ -395,5 +422,19 @@ func TestCheckpointStateClear(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func AssertStateEqual(t *testing.T, sf State, sm State) {
+	cpusetSf := sf.GetDefaultCPUSet()
+	cpusetSm := sm.GetDefaultCPUSet()
+	if !cpusetSf.Equals(cpusetSm) {
+		t.Errorf("State CPUSet mismatch. Have %v, want %v", cpusetSf, cpusetSm)
+	}
+
+	cpuassignmentSf := sf.GetCPUAssignments()
+	cpuassignmentSm := sm.GetCPUAssignments()
+	if !reflect.DeepEqual(cpuassignmentSf, cpuassignmentSm) {
+		t.Errorf("State CPU assignments mismatch. Have %s, want %s", cpuassignmentSf, cpuassignmentSm)
 	}
 }

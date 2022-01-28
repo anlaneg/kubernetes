@@ -17,13 +17,14 @@ limitations under the License.
 package cache
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 const mb int64 = 1024 * 1024
@@ -32,7 +33,7 @@ func TestGetNodeImageStates(t *testing.T) {
 	tests := []struct {
 		node              *v1.Node
 		imageExistenceMap map[string]sets.String
-		expected          map[string]*schedulernodeinfo.ImageStateSummary
+		expected          map[string]*framework.ImageStateSummary
 	}{
 		{
 			node: &v1.Node{
@@ -58,7 +59,7 @@ func TestGetNodeImageStates(t *testing.T) {
 				"gcr.io/10:v1":  sets.NewString("node-0", "node-1"),
 				"gcr.io/200:v1": sets.NewString("node-0"),
 			},
-			expected: map[string]*schedulernodeinfo.ImageStateSummary{
+			expected: map[string]*framework.ImageStateSummary{
 				"gcr.io/10:v1": {
 					Size:     int64(10 * mb),
 					NumNodes: 2,
@@ -78,15 +79,17 @@ func TestGetNodeImageStates(t *testing.T) {
 				"gcr.io/10:v1":  sets.NewString("node-1"),
 				"gcr.io/200:v1": sets.NewString(),
 			},
-			expected: map[string]*schedulernodeinfo.ImageStateSummary{},
+			expected: map[string]*framework.ImageStateSummary{},
 		},
 	}
 
-	for _, test := range tests {
-		imageStates := getNodeImageStates(test.node, test.imageExistenceMap)
-		if !reflect.DeepEqual(test.expected, imageStates) {
-			t.Errorf("expected: %#v, got: %#v", test.expected, imageStates)
-		}
+	for i, test := range tests {
+		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+			imageStates := getNodeImageStates(test.node, test.imageExistenceMap)
+			if !reflect.DeepEqual(test.expected, imageStates) {
+				t.Errorf("expected: %#v, got: %#v", test.expected, imageStates)
+			}
+		})
 	}
 }
 
@@ -168,10 +171,12 @@ func TestCreateImageExistenceMap(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
-		imageMap := createImageExistenceMap(test.nodes)
-		if !reflect.DeepEqual(test.expected, imageMap) {
-			t.Errorf("expected: %#v, got: %#v", test.expected, imageMap)
-		}
+	for i, test := range tests {
+		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+			imageMap := createImageExistenceMap(test.nodes)
+			if !reflect.DeepEqual(test.expected, imageMap) {
+				t.Errorf("expected: %#v, got: %#v", test.expected, imageMap)
+			}
+		})
 	}
 }

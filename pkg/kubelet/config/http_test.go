@@ -150,7 +150,7 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 					NodeName:        string(nodeName),
 					Containers:      []v1.Container{{Name: "1", Image: "foo", ImagePullPolicy: v1.PullAlways, TerminationMessagePolicy: v1.TerminationMessageReadFile}},
 					SecurityContext: &v1.PodSecurityContext{},
-					SchedulerName:   api.DefaultSchedulerName,
+					SchedulerName:   v1.DefaultSchedulerName,
 				},
 				Status: v1.PodStatus{
 					Phase: v1.PodPending,
@@ -164,7 +164,6 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 						Name:        "foo" + "-" + nodeName,
 						Namespace:   "mynamespace",
 						Annotations: map[string]string{kubetypes.ConfigHashAnnotationKey: "111"},
-						SelfLink:    getSelfLink("foo-"+nodeName, "mynamespace"),
 					},
 					Spec: v1.PodSpec{
 						NodeName:                      nodeName,
@@ -172,7 +171,7 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 						DNSPolicy:                     v1.DNSClusterFirst,
 						SecurityContext:               &v1.PodSecurityContext{},
 						TerminationGracePeriodSeconds: &grace,
-						SchedulerName:                 api.DefaultSchedulerName,
+						SchedulerName:                 v1.DefaultSchedulerName,
 						EnableServiceLinks:            &enableServiceLinks,
 
 						Containers: []v1.Container{{
@@ -205,7 +204,7 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 							NodeName:        nodeName,
 							Containers:      []v1.Container{{Name: "1", Image: "foo", ImagePullPolicy: v1.PullAlways, TerminationMessagePolicy: v1.TerminationMessageReadFile}},
 							SecurityContext: &v1.PodSecurityContext{},
-							SchedulerName:   api.DefaultSchedulerName,
+							SchedulerName:   v1.DefaultSchedulerName,
 						},
 						Status: v1.PodStatus{
 							Phase: v1.PodPending,
@@ -220,7 +219,7 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 							NodeName:        nodeName,
 							Containers:      []v1.Container{{Name: "2", Image: "bar:bartag", ImagePullPolicy: "", TerminationMessagePolicy: v1.TerminationMessageReadFile}},
 							SecurityContext: &v1.PodSecurityContext{},
-							SchedulerName:   api.DefaultSchedulerName,
+							SchedulerName:   v1.DefaultSchedulerName,
 						},
 						Status: v1.PodStatus{
 							Phase: v1.PodPending,
@@ -236,7 +235,6 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 						Name:        "foo" + "-" + nodeName,
 						Namespace:   "default",
 						Annotations: map[string]string{kubetypes.ConfigHashAnnotationKey: "111"},
-						SelfLink:    getSelfLink("foo-"+nodeName, metav1.NamespaceDefault),
 					},
 					Spec: v1.PodSpec{
 						NodeName:                      nodeName,
@@ -244,7 +242,7 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 						DNSPolicy:                     v1.DNSClusterFirst,
 						TerminationGracePeriodSeconds: &grace,
 						SecurityContext:               &v1.PodSecurityContext{},
-						SchedulerName:                 api.DefaultSchedulerName,
+						SchedulerName:                 v1.DefaultSchedulerName,
 						EnableServiceLinks:            &enableServiceLinks,
 
 						Containers: []v1.Container{{
@@ -265,7 +263,6 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 						Name:        "bar" + "-" + nodeName,
 						Namespace:   "default",
 						Annotations: map[string]string{kubetypes.ConfigHashAnnotationKey: "222"},
-						SelfLink:    getSelfLink("bar-"+nodeName, metav1.NamespaceDefault),
 					},
 					Spec: v1.PodSpec{
 						NodeName:                      nodeName,
@@ -273,7 +270,7 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 						DNSPolicy:                     v1.DNSClusterFirst,
 						TerminationGracePeriodSeconds: &grace,
 						SecurityContext:               &v1.PodSecurityContext{},
-						SchedulerName:                 api.DefaultSchedulerName,
+						SchedulerName:                 v1.DefaultSchedulerName,
 						EnableServiceLinks:            &enableServiceLinks,
 
 						Containers: []v1.Container{{
@@ -319,7 +316,7 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 			if err := k8s_api_v1.Convert_v1_Pod_To_core_Pod(pod, internalPod, nil); err != nil {
 				t.Fatalf("%s: Cannot convert pod %#v, %#v", testCase.desc, pod, err)
 			}
-			if errs := validation.ValidatePod(internalPod, validation.PodValidationOptions{}); len(errs) != 0 {
+			if errs := validation.ValidatePodCreate(internalPod, validation.PodValidationOptions{}); len(errs) != 0 {
 				t.Errorf("%s: Expected no validation errors on %#v, Got %v", testCase.desc, pod, errs.ToAggregate())
 			}
 		}

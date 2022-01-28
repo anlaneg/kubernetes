@@ -28,7 +28,7 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
-	e2esset "k8s.io/kubernetes/test/e2e/framework/statefulset"
+	e2estatefulset "k8s.io/kubernetes/test/e2e/framework/statefulset"
 	"k8s.io/kubernetes/test/e2e/storage/utils"
 )
 
@@ -66,10 +66,6 @@ var _ = utils.SIGDescribe("vsphere statefulset [Feature:vsphere]", func() {
 		client = f.ClientSet
 		Bootstrap(f)
 	})
-	ginkgo.AfterEach(func() {
-		framework.Logf("Deleting all statefulset in namespace: %v", namespace)
-		e2esset.DeleteAllStatefulSets(client, namespace)
-	})
 
 	ginkgo.It("vsphere statefulset testing", func() {
 		ginkgo.By("Creating StorageClass for Statefulset")
@@ -82,12 +78,13 @@ var _ = utils.SIGDescribe("vsphere statefulset [Feature:vsphere]", func() {
 
 		ginkgo.By("Creating statefulset")
 
-		statefulset := e2esset.CreateStatefulSet(client, manifestPath, namespace)
+		statefulset := e2estatefulset.CreateStatefulSet(client, manifestPath, namespace)
+		defer e2estatefulset.DeleteAllStatefulSets(client, namespace)
 		replicas := *(statefulset.Spec.Replicas)
 		// Waiting for pods status to be Ready
-		e2esset.WaitForStatusReadyReplicas(client, statefulset, replicas)
-		framework.ExpectNoError(e2esset.CheckMount(client, statefulset, mountPath))
-		ssPodsBeforeScaleDown := e2esset.GetPodList(client, statefulset)
+		e2estatefulset.WaitForStatusReadyReplicas(client, statefulset, replicas)
+		framework.ExpectNoError(e2estatefulset.CheckMount(client, statefulset, mountPath))
+		ssPodsBeforeScaleDown := e2estatefulset.GetPodList(client, statefulset)
 		gomega.Expect(ssPodsBeforeScaleDown.Items).NotTo(gomega.BeEmpty(), fmt.Sprintf("Unable to get list of Pods from the Statefulset: %v", statefulset.Name))
 		framework.ExpectEqual(len(ssPodsBeforeScaleDown.Items), int(replicas), "Number of Pods in the statefulset should match with number of replicas")
 
@@ -105,9 +102,9 @@ var _ = utils.SIGDescribe("vsphere statefulset [Feature:vsphere]", func() {
 		}
 
 		ginkgo.By(fmt.Sprintf("Scaling down statefulsets to number of Replica: %v", replicas-1))
-		_, scaledownErr := e2esset.Scale(client, statefulset, replicas-1)
+		_, scaledownErr := e2estatefulset.Scale(client, statefulset, replicas-1)
 		framework.ExpectNoError(scaledownErr)
-		e2esset.WaitForStatusReadyReplicas(client, statefulset, replicas-1)
+		e2estatefulset.WaitForStatusReadyReplicas(client, statefulset, replicas-1)
 
 		// After scale down, verify vsphere volumes are detached from deleted pods
 		ginkgo.By("Verify Volumes are detached from Nodes after Statefulsets is scaled down")
@@ -126,19 +123,19 @@ var _ = utils.SIGDescribe("vsphere statefulset [Feature:vsphere]", func() {
 		}
 
 		ginkgo.By(fmt.Sprintf("Scaling up statefulsets to number of Replica: %v", replicas))
-		_, scaleupErr := e2esset.Scale(client, statefulset, replicas)
+		_, scaleupErr := e2estatefulset.Scale(client, statefulset, replicas)
 		framework.ExpectNoError(scaleupErr)
-		e2esset.WaitForStatusReplicas(client, statefulset, replicas)
-		e2esset.WaitForStatusReadyReplicas(client, statefulset, replicas)
+		e2estatefulset.WaitForStatusReplicas(client, statefulset, replicas)
+		e2estatefulset.WaitForStatusReadyReplicas(client, statefulset, replicas)
 
-		ssPodsAfterScaleUp := e2esset.GetPodList(client, statefulset)
+		ssPodsAfterScaleUp := e2estatefulset.GetPodList(client, statefulset)
 		gomega.Expect(ssPodsAfterScaleUp.Items).NotTo(gomega.BeEmpty(), fmt.Sprintf("Unable to get list of Pods from the Statefulset: %v", statefulset.Name))
 		framework.ExpectEqual(len(ssPodsAfterScaleUp.Items), int(replicas), "Number of Pods in the statefulset should match with number of replicas")
 
 		// After scale up, verify all vsphere volumes are attached to node VMs.
 		ginkgo.By("Verify all volumes are attached to Nodes after Statefulsets is scaled up")
 		for _, sspod := range ssPodsAfterScaleUp.Items {
-			err := e2epod.WaitForPodsReady(client, statefulset.Namespace, sspod.Name, 0)
+			err := e2epod.WaitTimeoutForPodReadyInNamespace(client, sspod.Name, statefulset.Namespace, framework.PodStartTimeout)
 			framework.ExpectNoError(err)
 			pod, err := client.CoreV1().Pods(namespace).Get(context.TODO(), sspod.Name, metav1.GetOptions{})
 			framework.ExpectNoError(err)

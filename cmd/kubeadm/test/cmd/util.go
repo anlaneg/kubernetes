@@ -18,11 +18,11 @@ package kubeadm
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
 	"testing"
 
 	"github.com/pkg/errors"
-
 	"github.com/spf13/cobra"
 )
 
@@ -58,17 +58,6 @@ func RunSubCommand(t *testing.T, subCmds []*cobra.Command, command string, args 
 	}
 }
 
-// AssertSubCommandHasFlags is a utility function for kubeadm testing that assert if a Cobra sub command has expected flags
-func AssertSubCommandHasFlags(t *testing.T, subCmds []*cobra.Command, command string, flags ...string) {
-	subCmd := getSubCommand(t, subCmds, command)
-
-	for _, flag := range flags {
-		if subCmd.Flags().Lookup(flag) == nil {
-			t.Errorf("Could not find expecte flag %s for command %s", flag, command)
-		}
-	}
-}
-
 func getSubCommand(t *testing.T, subCmds []*cobra.Command, name string) *cobra.Command {
 	for _, subCmd := range subCmds {
 		if subCmd.Name() == name {
@@ -78,4 +67,14 @@ func getSubCommand(t *testing.T, subCmds []*cobra.Command, name string) *cobra.C
 	t.Fatalf("Unable to find sub command %s", name)
 
 	return nil
+}
+
+// getKubeadmPath returns the contents of the environment variable KUBEADM_PATH
+// or panics if it's empty
+func getKubeadmPath() string {
+	kubeadmPath := os.Getenv("KUBEADM_PATH")
+	if len(kubeadmPath) == 0 {
+		panic("the environment variable KUBEADM_PATH must point to the kubeadm binary path")
+	}
+	return kubeadmPath
 }

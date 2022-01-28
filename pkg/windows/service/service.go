@@ -1,3 +1,4 @@
+//go:build windows
 // +build windows
 
 /*
@@ -23,14 +24,10 @@ import (
 	"time"
 
 	"k8s.io/apiserver/pkg/server"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
-)
-
-var (
-	service *handler
 )
 
 type handler struct {
@@ -47,7 +44,6 @@ func InitService(serviceName string) error {
 		fromsvc: make(chan error),
 	}
 
-	service = h
 	var err error
 	go func() {
 		err = svc.Run(serviceName, h)

@@ -1,3 +1,4 @@
+//go:build !providerless
 // +build !providerless
 
 /*
@@ -35,7 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 const (

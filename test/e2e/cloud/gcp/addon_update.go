@@ -31,9 +31,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2enetwork "k8s.io/kubernetes/test/e2e/framework/network"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	e2essh "k8s.io/kubernetes/test/e2e/framework/ssh"
-	testutils "k8s.io/kubernetes/test/utils"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 
 	"github.com/onsi/ginkgo"
@@ -344,7 +344,7 @@ var _ = SIGDescribe("Addon update", func() {
 })
 
 func waitForServiceInAddonTest(c clientset.Interface, addonNamespace, name string, exist bool) {
-	framework.ExpectNoError(framework.WaitForService(c, addonNamespace, name, exist, addonTestPollInterval, addonTestPollTimeout))
+	framework.ExpectNoError(e2enetwork.WaitForService(c, addonNamespace, name, exist, addonTestPollInterval, addonTestPollTimeout))
 }
 
 func waitForReplicationControllerInAddonTest(c clientset.Interface, addonNamespace, name string, exist bool) {
@@ -390,7 +390,7 @@ func waitForServiceWithSelector(c clientset.Interface, namespace string, selecto
 		case len(services.Items) == 0:
 			framework.Logf("Service with %s in namespace %s disappeared.", selector.String(), namespace)
 			return !exist, nil
-		case !testutils.IsRetryableAPIError(err):
+		case err != nil:
 			framework.Logf("Non-retryable failure while listing service.")
 			return false, err
 		default:
@@ -448,7 +448,7 @@ func getMasterSSHClient() (*ssh.Client, error) {
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
-	host := framework.GetMasterHost() + ":22"
+	host := framework.APIAddress() + ":22"
 	client, err := ssh.Dial("tcp", host, config)
 	if err != nil {
 		return nil, fmt.Errorf("error getting SSH client to host %s: '%v'", host, err)

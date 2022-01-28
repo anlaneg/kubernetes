@@ -2,43 +2,40 @@
 
 module k8s.io/apimachinery
 
-go 1.13
+go 1.16
 
 require (
+	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/davecgh/go-spew v1.1.1
-	github.com/docker/spdystream v0.0.0-20160310174837-449fdfce4d96
 	github.com/elazarl/goproxy v0.0.0-20180725130230-947c36da3153
-	github.com/evanphx/json-patch v4.2.0+incompatible
-	github.com/gogo/protobuf v1.3.1
-	github.com/golang/groupcache v0.0.0-20160516000752-02826c3e7903
-	github.com/golang/protobuf v1.3.2
-	github.com/google/go-cmp v0.3.0
+	github.com/evanphx/json-patch v4.12.0+incompatible
+	github.com/gogo/protobuf v1.3.2
+	github.com/golang/protobuf v1.5.2
+	github.com/google/go-cmp v0.5.5
 	github.com/google/gofuzz v1.1.0
-	github.com/google/uuid v1.1.1
-	github.com/googleapis/gnostic v0.1.0
-	github.com/hashicorp/golang-lru v0.5.1
-	github.com/json-iterator/go v1.1.8
-	github.com/kr/pretty v0.1.0 // indirect
-	github.com/modern-go/reflect2 v1.0.1
+	github.com/google/uuid v1.1.2
+	github.com/googleapis/gnostic v0.5.5
+	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/kr/text v0.2.0 // indirect
+	github.com/moby/spdystream v0.2.0
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f
-	github.com/onsi/ginkgo v1.11.0 // indirect
-	github.com/onsi/gomega v1.7.0 // indirect
+	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
+	github.com/onsi/ginkgo v1.14.0 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/spf13/pflag v1.0.5
-	github.com/stretchr/testify v1.4.0
-	golang.org/x/net v0.0.0-20191004110552-13f9640d40b9
-	golang.org/x/sys v0.0.0-20191022100944-742c48ecaeb7 // indirect
-	golang.org/x/text v0.3.2 // indirect
-	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
+	github.com/stretchr/testify v1.7.0
+	golang.org/x/net v0.0.0-20211209124913-491a49abca63
+	golang.org/x/sys v0.0.0-20220114195835-da31bd327af9 // indirect
+	golang.org/x/text v0.3.7 // indirect
+	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 	gopkg.in/inf.v0 v0.9.1
-	gopkg.in/yaml.v2 v2.2.8
-	k8s.io/klog v1.0.0
-	k8s.io/kube-openapi v0.0.0-20200121204235-bf4fb3bd569c
-	sigs.k8s.io/structured-merge-diff/v3 v3.0.0
+	gopkg.in/yaml.v2 v2.4.0 // indirect
+	k8s.io/klog/v2 v2.40.1
+	k8s.io/kube-openapi v0.0.0-20211115234752-e816edb12b65
+	k8s.io/utils v0.0.0-20211208161948-7d6a63dca704
+	sigs.k8s.io/json v0.0.0-20211208200746-9f7c6b3444d2
+	sigs.k8s.io/structured-merge-diff/v4 v4.2.1
 	sigs.k8s.io/yaml v1.2.0
 )
 
-replace (
-	golang.org/x/sys => golang.org/x/sys v0.0.0-20190813064441-fde4db37ae7a // pinned to release-branch.go1.13
-	golang.org/x/tools => golang.org/x/tools v0.0.0-20190821162956-65e3620a7ae7 // pinned to release-branch.go1.13
-	k8s.io/apimachinery => ../apimachinery
-)
+replace k8s.io/apimachinery => ../apimachinery

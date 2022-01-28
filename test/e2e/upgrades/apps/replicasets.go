@@ -14,19 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package upgrades
+package apps
 
 import (
 	"context"
 	"fmt"
-	"time"
-
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/test/e2e/framework"
-	"k8s.io/kubernetes/test/e2e/framework/replicaset"
+	e2ereplicaset "k8s.io/kubernetes/test/e2e/framework/replicaset"
 	"k8s.io/kubernetes/test/e2e/upgrades"
 
 	"github.com/onsi/ginkgo"
@@ -34,8 +32,6 @@ import (
 )
 
 const (
-	interval = 10 * time.Second
-	timeout  = 5 * time.Minute
 	rsName   = "rs"
 	scaleNum = 2
 )
@@ -63,7 +59,7 @@ func (r *ReplicaSetUpgradeTest) Setup(f *framework.Framework) {
 	framework.ExpectNoError(err)
 
 	ginkgo.By(fmt.Sprintf("Waiting for replicaset %s to have all of its replicas ready", rsName))
-	framework.ExpectNoError(replicaset.WaitForReadyReplicaSet(c, ns, rsName))
+	framework.ExpectNoError(e2ereplicaset.WaitForReadyReplicaSet(c, ns, rsName))
 
 	r.UID = rs.UID
 }
@@ -87,17 +83,17 @@ func (r *ReplicaSetUpgradeTest) Test(f *framework.Framework, done <-chan struct{
 	}
 
 	ginkgo.By(fmt.Sprintf("Waiting for replicaset %s to have all of its replicas ready after upgrade", rsName))
-	framework.ExpectNoError(replicaset.WaitForReadyReplicaSet(c, ns, rsName))
+	framework.ExpectNoError(e2ereplicaset.WaitForReadyReplicaSet(c, ns, rsName))
 
 	// Verify the upgraded RS is active by scaling up the RS to scaleNum and ensuring all pods are Ready
 	ginkgo.By(fmt.Sprintf("Scaling up replicaset %s to %d", rsName, scaleNum))
-	_, err = replicaset.UpdateReplicaSetWithRetries(c, ns, rsName, func(rs *appsv1.ReplicaSet) {
+	_, err = e2ereplicaset.UpdateReplicaSetWithRetries(c, ns, rsName, func(rs *appsv1.ReplicaSet) {
 		*rs.Spec.Replicas = scaleNum
 	})
 	framework.ExpectNoError(err)
 
 	ginkgo.By(fmt.Sprintf("Waiting for replicaset %s to have all of its replicas ready after scaling", rsName))
-	framework.ExpectNoError(replicaset.WaitForReadyReplicaSet(c, ns, rsName))
+	framework.ExpectNoError(e2ereplicaset.WaitForReadyReplicaSet(c, ns, rsName))
 }
 
 // Teardown cleans up any remaining resources.

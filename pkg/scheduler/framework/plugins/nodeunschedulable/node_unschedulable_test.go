@@ -22,8 +22,7 @@ import (
 	"testing"
 
 	v1 "k8s.io/api/core/v1"
-	framework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
-	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 func TestNodeUnschedulable(t *testing.T) {
@@ -73,7 +72,7 @@ func TestNodeUnschedulable(t *testing.T) {
 	}
 
 	for _, test := range testCases {
-		nodeInfo := schedulernodeinfo.NewNodeInfo()
+		nodeInfo := framework.NewNodeInfo()
 		nodeInfo.SetNode(test.node)
 
 		p, _ := New(nil, nil)

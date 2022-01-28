@@ -18,6 +18,7 @@ package storage
 
 import (
 	"context"
+
 	"github.com/onsi/ginkgo"
 
 	v1 "k8s.io/api/core/v1"
@@ -69,6 +70,7 @@ var _ = utils.SIGDescribe("GenericPersistentVolume[Disruptive]", func() {
 			pv        *v1.PersistentVolume
 		)
 		ginkgo.BeforeEach(func() {
+			e2epv.SkipIfNoDefaultStorageClass(c)
 			framework.Logf("Initializing pod and pvcs for test")
 			clientPod, pvc, pv = createPodPVCFromSC(f, c, ns)
 		})
@@ -92,6 +94,7 @@ func createPodPVCFromSC(f *framework.Framework, c clientset.Interface, ns string
 	var err error
 	test := testsuites.StorageClassTest{
 		Name:      "default",
+		Timeouts:  f.Timeouts,
 		ClaimSize: "2Gi",
 	}
 	pvc := e2epv.MakePersistentVolumeClaim(e2epv.PersistentVolumeClaimConfig{
@@ -106,9 +109,12 @@ func createPodPVCFromSC(f *framework.Framework, c clientset.Interface, ns string
 	framework.ExpectEqual(len(pvs), 1)
 
 	ginkgo.By("Creating a pod with dynamically provisioned volume")
-	pod, err := e2epod.CreateSecPod(c, ns, pvcClaims, nil,
-		false, "", false, false, e2epv.SELinuxLabel,
-		nil, framework.PodStartTimeout)
+	podConfig := e2epod.Config{
+		NS:           ns,
+		PVCs:         pvcClaims,
+		SeLinuxLabel: e2epv.SELinuxLabel,
+	}
+	pod, err := e2epod.CreateSecPod(c, &podConfig, f.Timeouts.PodStart)
 	framework.ExpectNoError(err, "While creating pods for kubelet restart test")
 	return pod, pvc, pvs[0]
 }

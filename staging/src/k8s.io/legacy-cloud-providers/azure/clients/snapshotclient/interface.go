@@ -1,3 +1,4 @@
+//go:build !providerless
 // +build !providerless
 
 /*
@@ -16,12 +17,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+//go:generate mockgen -copyright_file=$BUILD_TAG_FILE -source=interface.go  -destination=mocksnapshotclient/interface.go -package=mocksnapshotclient Interface
 package snapshotclient
 
 import (
 	"context"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-07-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-12-01/compute"
 	"k8s.io/legacy-cloud-providers/azure/retry"
 )
 
@@ -31,8 +33,6 @@ const (
 )
 
 // Interface is the client interface for Snapshots.
-// Don't forget to run the following command to generate the mock client:
-// mockgen -source=$GOPATH/src/k8s.io/kubernetes/staging/src/k8s.io/legacy-cloud-providers/azure/clients/snapshotclient/interface.go -package=mocksnapshotclient Interface > $GOPATH/src/k8s.io/kubernetes/staging/src/k8s.io/legacy-cloud-providers/azure/clients/snapshotclient/mocksnapshotclient/interface.go
 type Interface interface {
 	// Get gets a Snapshot.
 	Get(ctx context.Context, resourceGroupName string, snapshotName string) (compute.Snapshot, *retry.Error)

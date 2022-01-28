@@ -1,3 +1,4 @@
+//go:build !providerless
 // +build !providerless
 
 /*
@@ -16,12 +17,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+//go:generate mockgen -copyright_file=$BUILD_TAG_FILE -source=interface.go  -destination=mockvmsizeclient/interface.go -package=mockvmsizeclient Interface
 package vmsizeclient
 
 import (
 	"context"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-07-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-12-01/compute"
 	"k8s.io/legacy-cloud-providers/azure/retry"
 )
 
@@ -31,8 +33,6 @@ const (
 )
 
 // Interface is the client interface for VirtualMachineSizes.
-// Don't forget to run the following command to generate the mock client:
-// mockgen -source=$GOPATH/src/k8s.io/kubernetes/staging/src/k8s.io/legacy-cloud-providers/azure/clients/vmsizeclient/interface.go -package=mockvmsizeclient Interface > $GOPATH/src/k8s.io/kubernetes/staging/src/k8s.io/legacy-cloud-providers/azure/clients/vmsizeclient/mockvmsizeclient/interface.go
 type Interface interface {
 	// List gets compute.VirtualMachineSizeListResult.
 	List(ctx context.Context, location string) (result compute.VirtualMachineSizeListResult, rerr *retry.Error)

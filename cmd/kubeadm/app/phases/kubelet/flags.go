@@ -18,28 +18,33 @@ package kubelet
 
 import (
 	"fmt"
-	"github.com/pkg/errors"
 	"io/ioutil"
-	"k8s.io/klog"
-	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
-	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
-	"k8s.io/kubernetes/cmd/kubeadm/app/features"
-	"k8s.io/kubernetes/cmd/kubeadm/app/images"
-	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
-	"k8s.io/kubernetes/cmd/kubeadm/app/util/initsystem"
-	utilsexec "k8s.io/utils/exec"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/pkg/errors"
+
+	versionutil "k8s.io/apimachinery/pkg/util/version"
+	componentversion "k8s.io/component-base/version"
+	"k8s.io/klog/v2"
+	utilsexec "k8s.io/utils/exec"
+
+	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
+	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
+	"k8s.io/kubernetes/cmd/kubeadm/app/images"
+	preflight "k8s.io/kubernetes/cmd/kubeadm/app/preflight"
+	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
 )
 
 type kubeletFlagsOpts struct {
 	nodeRegOpts              *kubeadmapi.NodeRegistrationOptions
-	featureGates             map[string]bool
 	pauseImage               string
 	registerTaintsUsingFlags bool
-	execer                   utilsexec.Interface
-	isServiceActiveFunc      func(string) (bool, error)
+	// This is a temporary measure until kubeadm no longer supports a kubelet version with built-in dockershim.
+	// TODO: https://github.com/kubernetes/kubeadm/issues/2626
+	kubeletVersion *versionutil.Version
 }
 
 // GetNodeNameAndHostname obtains the name for this Node using the following precedence
@@ -63,19 +68,24 @@ func GetNodeNameAndHostname(cfg *kubeadmapi.NodeRegistrationOptions) (string, st
 // WriteKubeletDynamicEnvFile writes an environment file with dynamic flags to the kubelet.
 // Used at "kubeadm init" and "kubeadm join" time.
 func WriteKubeletDynamicEnvFile(cfg *kubeadmapi.ClusterConfiguration, nodeReg *kubeadmapi.NodeRegistrationOptions, registerTaintsUsingFlags bool, kubeletDir string) error {
+	// This is a temporary measure until kubeadm no longer supports a kubelet version with built-in dockershim.
+	// TODO: https://github.com/kubernetes/kubeadm/issues/2626
+	kubeletVersion, err := preflight.GetKubeletVersion(utilsexec.New())
+	if err != nil {
+		// We cannot return an error here, due to the k/k CI, where /cmd/kubeadm/test tests run without
+		// a kubelet built on the host. On error, we assume a kubelet version equal to the version
+		// of the kubeadm binary. During normal cluster creation this should not happens as kubeadm needs
+		// the kubelet binary for init / join.
+		kubeletVersion = versionutil.MustParseSemantic(componentversion.Get().GitVersion)
+		klog.Warningf("cannot obtain the version of the kubelet while writing dynamic environment file: %v."+
+			" Using the version of the kubeadm binary: %s", err, kubeletVersion.String())
+	}
+
 	flagOpts := kubeletFlagsOpts{
 		nodeRegOpts:              nodeReg,
-		featureGates:             cfg.FeatureGates,
 		pauseImage:               images.GetPauseImage(cfg),
 		registerTaintsUsingFlags: registerTaintsUsingFlags,
-		execer:                   utilsexec.New(),
-		isServiceActiveFunc: func(name string) (bool, error) {
-			initSystem, err := initsystem.GetInitSystem()
-			if err != nil {
-				return false, err
-			}
-			return initSystem.ServiceIsActive(name), nil
-		},
+		kubeletVersion:           kubeletVersion,
 	}
 	stringMap := buildKubeletArgMap(flagOpts)
 	argList := kubeadmutil.BuildArgumentListFromMap(stringMap, nodeReg.KubeletExtraArgs)
@@ -89,15 +99,27 @@ func WriteKubeletDynamicEnvFile(cfg *kubeadmapi.ClusterConfiguration, nodeReg *k
 func buildKubeletArgMapCommon(opts kubeletFlagsOpts) map[string]string {
 	kubeletFlags := map[string]string{}
 
-	if opts.nodeRegOpts.CRISocket == constants.DefaultDockerCRISocket {
-		// These flags should only be set when running docker
+	// This is a temporary measure until kubeadm no longer supports a kubelet version with built-in dockershim.
+	// Once that happens only the "remote" branch option should be left.
+	// TODO: https://github.com/kubernetes/kubeadm/issues/2626
+	hasDockershim := opts.kubeletVersion.Major() == 1 && opts.kubeletVersion.Minor() < 24
+	var dockerSocket string
+	if runtime.GOOS == "windows" {
+		dockerSocket = "npipe:////./pipe/dockershim"
+	} else {
+		dockerSocket = "unix:///var/run/dockershim.sock"
+	}
+	if opts.nodeRegOpts.CRISocket == dockerSocket && hasDockershim {
 		kubeletFlags["network-plugin"] = "cni"
-		if opts.pauseImage != "" {
-			kubeletFlags["pod-infra-container-image"] = opts.pauseImage
-		}
 	} else {
 		kubeletFlags["container-runtime"] = "remote"
 		kubeletFlags["container-runtime-endpoint"] = opts.nodeRegOpts.CRISocket
+	}
+
+	// This flag passes the pod infra container image (e.g. "pause" image) to the kubelet
+	// and prevents its garbage collection
+	if opts.pauseImage != "" {
+		kubeletFlags["pod-infra-container-image"] = opts.pauseImage
 	}
 
 	if opts.registerTaintsUsingFlags && opts.nodeRegOpts.Taints != nil && len(opts.nodeRegOpts.Taints) > 0 {
@@ -119,12 +141,6 @@ func buildKubeletArgMapCommon(opts kubeletFlagsOpts) map[string]string {
 		kubeletFlags["hostname-override"] = nodeName
 	}
 
-	// TODO: The following code should be removed after dual-stack is GA.
-	// Note: The user still retains the ability to explicitly set feature-gates and that value will overwrite this base value.
-	if enabled, present := opts.featureGates[features.IPv6DualStack]; present {
-		kubeletFlags["feature-gates"] = fmt.Sprintf("%s=%t", features.IPv6DualStack, enabled)
-	}
-
 	return kubeletFlags
 }
 
@@ -141,4 +157,10 @@ func writeKubeletFlagBytesToDisk(b []byte, kubeletDir string) error {
 		return errors.Wrapf(err, "failed to write kubelet configuration to the file %q", kubeletEnvFilePath)
 	}
 	return nil
+}
+
+// buildKubeletArgMap takes a kubeletFlagsOpts object and builds based on that a string-string map with flags
+// that should be given to the local kubelet daemon.
+func buildKubeletArgMap(opts kubeletFlagsOpts) map[string]string {
+	return buildKubeletArgMapCommon(opts)
 }

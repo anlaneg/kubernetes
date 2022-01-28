@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,20 +43,18 @@ import (
 	"k8s.io/apiserver/pkg/authentication/request/bearertoken"
 	apiserverserviceaccount "k8s.io/apiserver/pkg/authentication/serviceaccount"
 	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	clientset "k8s.io/client-go/kubernetes"
 	v1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/keyutil"
-	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/kubernetes/pkg/apis/core"
 	serviceaccountgetter "k8s.io/kubernetes/pkg/controller/serviceaccount"
-	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/serviceaccount"
 	"k8s.io/kubernetes/test/integration/framework"
 )
 
+// This key is for testing purposes only and is not considered secure.
 const ecdsaPrivateKey = `-----BEGIN EC PRIVATE KEY-----
 MHcCAQEEIEZmTmUhuanLjPA2CLquXivuwBDHTt5XYwgIr/kA1LtRoAoGCCqGSM49
 AwEHoUQDQgAEH6cuzP8XuD5wal6wf9M6xDljTOPLX2i8uIp/C/ASqiIGUeeKQtX0
@@ -63,8 +62,6 @@ AwEHoUQDQgAEH6cuzP8XuD5wal6wf9M6xDljTOPLX2i8uIp/C/ASqiIGUeeKQtX0
 -----END EC PRIVATE KEY-----`
 
 func TestServiceAccountTokenCreate(t *testing.T) {
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.TokenRequest, true)()
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ServiceAccountIssuerDiscovery, true)()
 
 	// Build client config, clientset, and informers
 	sk, err := keyutil.ParsePrivateKeyPEM([]byte(ecdsaPrivateKey))
@@ -77,7 +74,7 @@ func TestServiceAccountTokenCreate(t *testing.T) {
 	const iss = "https://foo.bar.example.com"
 	aud := authenticator.Audiences{"api"}
 
-	maxExpirationSeconds := int64(60 * 60)
+	maxExpirationSeconds := int64(60 * 60 * 2)
 	maxExpirationDuration, err := time.ParseDuration(fmt.Sprintf("%ds", maxExpirationSeconds))
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -86,12 +83,12 @@ func TestServiceAccountTokenCreate(t *testing.T) {
 	gcs := &clientset.Clientset{}
 
 	// Start the server
-	masterConfig := framework.NewIntegrationTestMasterConfig()
-	masterConfig.GenericConfig.Authorization.Authorizer = authorizerfactory.NewAlwaysAllowAuthorizer()
-	masterConfig.GenericConfig.Authentication.APIAudiences = aud
-	masterConfig.GenericConfig.Authentication.Authenticator = bearertoken.New(
+	controlPlaneConfig := framework.NewIntegrationTestControlPlaneConfig()
+	controlPlaneConfig.GenericConfig.Authorization.Authorizer = authorizerfactory.NewAlwaysAllowAuthorizer()
+	controlPlaneConfig.GenericConfig.Authentication.APIAudiences = aud
+	controlPlaneConfig.GenericConfig.Authentication.Authenticator = bearertoken.New(
 		serviceaccount.JWTTokenAuthenticator(
-			iss,
+			[]string{iss},
 			[]interface{}{&pk},
 			aud,
 			serviceaccount.NewValidator(serviceaccountgetter.NewGetterFromClient(
@@ -113,24 +110,25 @@ func TestServiceAccountTokenCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	masterConfig.ExtraConfig.ServiceAccountIssuer = tokenGenerator
-	masterConfig.ExtraConfig.ServiceAccountMaxExpiration = maxExpirationDuration
-	masterConfig.GenericConfig.Authentication.APIAudiences = aud
+	controlPlaneConfig.ExtraConfig.ServiceAccountIssuer = tokenGenerator
+	controlPlaneConfig.ExtraConfig.ServiceAccountMaxExpiration = maxExpirationDuration
+	controlPlaneConfig.GenericConfig.Authentication.APIAudiences = aud
+	controlPlaneConfig.ExtraConfig.ExtendExpiration = true
 
-	masterConfig.ExtraConfig.ServiceAccountIssuerURL = iss
-	masterConfig.ExtraConfig.ServiceAccountJWKSURI = ""
-	masterConfig.ExtraConfig.ServiceAccountPublicKeys = []interface{}{&pk}
+	controlPlaneConfig.ExtraConfig.ServiceAccountIssuerURL = iss
+	controlPlaneConfig.ExtraConfig.ServiceAccountJWKSURI = ""
+	controlPlaneConfig.ExtraConfig.ServiceAccountPublicKeys = []interface{}{&pk}
 
-	master, _, closeFn := framework.RunAMaster(masterConfig)
+	instanceConfig, _, closeFn := framework.RunAnAPIServer(controlPlaneConfig)
 	defer closeFn()
 
-	cs, err := clientset.NewForConfig(master.GenericAPIServer.LoopbackClientConfig)
+	cs, err := clientset.NewForConfig(instanceConfig.GenericAPIServer.LoopbackClientConfig)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	*gcs = *cs
 
-	rc, err := rest.UnversionedRESTClientFor(master.GenericAPIServer.LoopbackClientConfig)
+	rc, err := rest.UnversionedRESTClientFor(instanceConfig.GenericAPIServer.LoopbackClientConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,14 +371,68 @@ func TestServiceAccountTokenCreate(t *testing.T) {
 		coresa := core.ServiceAccount{
 			ObjectMeta: sa.ObjectMeta,
 		}
-		_, pc := serviceaccount.Claims(coresa, nil, nil, 0, nil)
-		tok, err := masterConfig.ExtraConfig.ServiceAccountIssuer.GenerateToken(sc, pc)
+		_, pc := serviceaccount.Claims(coresa, nil, nil, 0, 0, nil)
+		tok, err := controlPlaneConfig.ExtraConfig.ServiceAccountIssuer.GenerateToken(sc, pc)
 		if err != nil {
 			t.Fatalf("err signing expired token: %v", err)
 		}
 
 		treq.Status.Token = tok
 		doTokenReview(t, cs, treq, true)
+	})
+
+	t.Run("expiration extended token", func(t *testing.T) {
+		var requestExp int64 = 60*60 + 7
+		treq := &authenticationv1.TokenRequest{
+			Spec: authenticationv1.TokenRequestSpec{
+				Audiences:         []string{"api"},
+				ExpirationSeconds: &requestExp,
+				BoundObjectRef: &authenticationv1.BoundObjectReference{
+					Kind:       "Pod",
+					APIVersion: "v1",
+					Name:       pod.Name,
+				},
+			},
+		}
+
+		sa, del := createDeleteSvcAcct(t, cs, sa)
+		defer del()
+		pod, delPod := createDeletePod(t, cs, pod)
+		defer delPod()
+		treq.Spec.BoundObjectRef.UID = pod.UID
+
+		treq, err = cs.CoreV1().ServiceAccounts(sa.Namespace).CreateToken(context.TODO(), sa.Name, treq, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+
+		doTokenReview(t, cs, treq, false)
+
+		// Give some tolerance to avoid flakiness since we are using real time.
+		var leeway int64 = 2
+		actualExpiry := jwt.NewNumericDate(time.Now().Add(time.Duration(24*365) * time.Hour))
+		assumedExpiry := jwt.NewNumericDate(time.Now().Add(time.Duration(requestExp) * time.Second))
+		exp, err := strconv.ParseInt(getSubObject(t, getPayload(t, treq.Status.Token), "exp"), 10, 64)
+		if err != nil {
+			t.Fatalf("error parsing exp: %v", err)
+		}
+		warnafter, err := strconv.ParseInt(getSubObject(t, getPayload(t, treq.Status.Token), "kubernetes.io", "warnafter"), 10, 64)
+		if err != nil {
+			t.Fatalf("error parsing warnafter: %v", err)
+		}
+
+		if exp < int64(actualExpiry)-leeway || exp > int64(actualExpiry)+leeway {
+			t.Errorf("unexpected token exp %d, should within range of %d +- %d seconds", exp, actualExpiry, leeway)
+		}
+		if warnafter < int64(assumedExpiry)-leeway || warnafter > int64(assumedExpiry)+leeway {
+			t.Errorf("unexpected token warnafter %d, should within range of %d +- %d seconds", warnafter, assumedExpiry, leeway)
+		}
+
+		checkExpiration(t, treq, requestExp)
+		expStatus := treq.Status.ExpirationTimestamp.Time.Unix()
+		if expStatus < int64(assumedExpiry)-leeway || warnafter > int64(assumedExpiry)+leeway {
+			t.Errorf("unexpected expiration returned in tokenrequest status %d, should within range of %d +- %d seconds", expStatus, assumedExpiry, leeway)
+		}
 	})
 
 	t.Run("a token without an api audience is invalid", func(t *testing.T) {

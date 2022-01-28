@@ -22,7 +22,9 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
+	"k8s.io/kubectl/pkg/explain"
+	"k8s.io/kubectl/pkg/util"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -55,10 +57,13 @@ type TaintOptions struct {
 	selector       string
 	overwrite      bool
 	all            bool
+	fieldManager   string
 
 	ClientForMapping func(*meta.RESTMapping) (resource.RESTClient, error)
 
 	genericclioptions.IOStreams
+
+	Mapper meta.RESTMapper
 }
 
 var (
@@ -67,17 +72,17 @@ var (
 
 		* A taint consists of a key, value, and effect. As an argument here, it is expressed as key=value:effect.
 		* The key must begin with a letter or number, and may contain letters, numbers, hyphens, dots, and underscores, up to %[1]d characters.
-		* Optionally, the key can begin with a DNS subdomain prefix and a single '/', like example.com/my-app
+		* Optionally, the key can begin with a DNS subdomain prefix and a single '/', like example.com/my-app.
 		* The value is optional. If given, it must begin with a letter or number, and may contain letters, numbers, hyphens, dots, and underscores, up to %[2]d characters.
 		* The effect must be NoSchedule, PreferNoSchedule or NoExecute.
 		* Currently taint can only apply to node.`))
 
 	taintExample = templates.Examples(i18n.T(`
-		# Update node 'foo' with a taint with key 'dedicated' and value 'special-user' and effect 'NoSchedule'.
-		# If a taint with that key and effect already exists, its value is replaced as specified.
+		# Update node 'foo' with a taint with key 'dedicated' and value 'special-user' and effect 'NoSchedule'
+		# If a taint with that key and effect already exists, its value is replaced as specified
 		kubectl taint nodes foo dedicated=special-user:NoSchedule
 
-		# Remove from node 'foo' the taint with key 'dedicated' and effect 'NoSchedule' if one exists.
+		# Remove from node 'foo' the taint with key 'dedicated' and effect 'NoSchedule' if one exists
 		kubectl taint nodes foo dedicated:NoSchedule-
 
 		# Remove from node 'foo' all the taints with key 'dedicated'
@@ -104,27 +109,32 @@ func NewCmdTaint(f cmdutil.Factory, streams genericclioptions.IOStreams) *cobra.
 		Short:                 i18n.T("Update the taints on one or more nodes"),
 		Long:                  fmt.Sprintf(taintLong, validation.DNS1123SubdomainMaxLength, validation.LabelValueMaxLength),
 		Example:               taintExample,
+		ValidArgsFunction:     util.SpecifiedResourceTypeAndNameCompletionFunc(f, validArgs),
 		Run: func(cmd *cobra.Command, args []string) {
 			cmdutil.CheckErr(options.Complete(f, cmd, args))
 			cmdutil.CheckErr(options.Validate())
 			cmdutil.CheckErr(options.RunTaint())
 		},
-		ValidArgs: validArgs,
 	}
 
 	options.PrintFlags.AddFlags(cmd)
 	cmdutil.AddDryRunFlag(cmd)
-
 	cmdutil.AddValidateFlags(cmd)
-	cmd.Flags().StringVarP(&options.selector, "selector", "l", options.selector, "Selector (label query) to filter on, supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2)")
+	cmdutil.AddLabelSelectorFlagVar(cmd, &options.selector)
 	cmd.Flags().BoolVar(&options.overwrite, "overwrite", options.overwrite, "If true, allow taints to be overwritten, otherwise reject taint updates that overwrite existing taints.")
 	cmd.Flags().BoolVar(&options.all, "all", options.all, "Select all nodes in the cluster")
+	cmdutil.AddFieldManagerFlagVar(cmd, &options.fieldManager, "kubectl-taint")
 	return cmd
 }
 
 // Complete adapts from the command line args and factory to the data required.
 func (o *TaintOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, args []string) (err error) {
 	namespace, _, err := f.ToRawKubeConfigLoader().Namespace()
+	if err != nil {
+		return err
+	}
+
+	o.Mapper, err = f.ToRESTMapper()
 	if err != nil {
 		return err
 	}
@@ -137,11 +147,7 @@ func (o *TaintOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, args []st
 	if err != nil {
 		return err
 	}
-	discoveryClient, err := f.ToDiscoveryClient()
-	if err != nil {
-		return err
-	}
-	o.DryRunVerifier = resource.NewDryRunVerifier(dynamicClient, discoveryClient)
+	o.DryRunVerifier = resource.NewDryRunVerifier(dynamicClient, f.OpenAPIGetter())
 	cmdutil.PrintFlagsWithDryRunStrategy(o.PrintFlags, o.DryRunStrategy)
 
 	// retrieves resource and taint args from args
@@ -219,15 +225,18 @@ func (o TaintOptions) validateFlags() error {
 // Validate checks to the TaintOptions to see if there is sufficient information run the command.
 func (o TaintOptions) Validate() error {
 	resourceType := strings.ToLower(o.resources[0])
-	validResources, isValidResource := []string{"node", "nodes"}, false
-	for _, validResource := range validResources {
-		if resourceType == validResource {
-			isValidResource = true
-			break
-		}
+	fullySpecifiedGVR, _, err := explain.SplitAndParseResourceRequest(resourceType, o.Mapper)
+	if err != nil {
+		return err
 	}
-	if !isValidResource {
-		return fmt.Errorf("invalid resource type %s, only %q are supported", o.resources[0], validResources)
+
+	gvk, err := o.Mapper.KindFor(fullySpecifiedGVR)
+	if err != nil {
+		return err
+	}
+
+	if gvk.Kind != "Node" {
+		return fmt.Errorf("invalid resource type %s, only node types are supported", resourceType)
 	}
 
 	// check the format of taint args and checks removed taints aren't in the new taints list
@@ -238,7 +247,7 @@ func (o TaintOptions) Validate() error {
 				continue
 			}
 			if len(taintRemove.Effect) == 0 || taintAdd.Effect == taintRemove.Effect {
-				conflictTaint := fmt.Sprintf("{\"%s\":\"%s\"}", taintRemove.Key, taintRemove.Effect)
+				conflictTaint := fmt.Sprintf("%s=%s", taintRemove.Key, taintRemove.Effect)
 				conflictTaints = append(conflictTaints, conflictTaint)
 			}
 		}
@@ -328,6 +337,7 @@ func (o TaintOptions) RunTaint() error {
 		}
 		helper := resource.
 			NewHelper(client, mapping).
+			WithFieldManager(o.fieldManager).
 			DryRun(o.DryRunStrategy == cmdutil.DryRunServer)
 
 		var outputObj runtime.Object

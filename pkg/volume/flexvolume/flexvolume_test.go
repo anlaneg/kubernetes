@@ -26,6 +26,7 @@ import (
 
 	"k8s.io/api/core/v1"
 	utiltesting "k8s.io/client-go/util/testing"
+	utilfs "k8s.io/kubernetes/pkg/util/filesystem"
 	"k8s.io/kubernetes/pkg/volume"
 	volumetest "k8s.io/kubernetes/pkg/volume/testing"
 	"k8s.io/utils/exec"
@@ -123,12 +124,14 @@ func TestCanSupport(t *testing.T) {
 	plugMgr := volume.VolumePluginMgr{}
 	runner := exec.New()
 	installPluginUnderTest(t, "kubernetes.io", "fakeAttacher", tmpDir, execScriptTempl1, nil)
-	plugMgr.InitPlugins(nil, GetDynamicPluginProber(tmpDir, runner), volumetest.NewFakeVolumeHost(t, "fake", nil, nil))
-	plugin, err := plugMgr.FindPluginByName("flexvolume-kubernetes.io/fakeAttacher")
+	if err := plugMgr.InitPlugins(nil, GetDynamicPluginProberWithoutWatcher(tmpDir, runner), volumetest.NewFakeVolumeHost(t, "fake", nil, nil)); err != nil {
+		t.Fatalf("Could not initialize plugins: %v", err)
+	}
+	plugin, err := plugMgr.FindPluginByName("kubernetes.io/fakeAttacher")
 	if err != nil {
 		t.Fatalf("Can't find the plugin by name")
 	}
-	if plugin.GetPluginName() != "flexvolume-kubernetes.io/fakeAttacher" {
+	if plugin.GetPluginName() != "kubernetes.io/fakeAttacher" {
 		t.Errorf("Wrong name: %s", plugin.GetPluginName())
 	}
 	if !plugin.CanSupport(&volume.Spec{Volume: &v1.Volume{VolumeSource: v1.VolumeSource{FlexVolume: &v1.FlexVolumeSource{Driver: "kubernetes.io/fakeAttacher"}}}}) {
@@ -152,13 +155,24 @@ func TestGetAccessModes(t *testing.T) {
 	plugMgr := volume.VolumePluginMgr{}
 	runner := exec.New()
 	installPluginUnderTest(t, "kubernetes.io", "fakeAttacher", tmpDir, execScriptTempl1, nil)
-	plugMgr.InitPlugins(nil, GetDynamicPluginProber(tmpDir, runner), volumetest.NewFakeVolumeHost(t, tmpDir, nil, nil))
-
-	plugin, err := plugMgr.FindPersistentPluginByName("flexvolume-kubernetes.io/fakeAttacher")
+	if err := plugMgr.InitPlugins(nil, GetDynamicPluginProberWithoutWatcher(tmpDir, runner), volumetest.NewFakeVolumeHost(t, tmpDir, nil, nil)); err != nil {
+		t.Fatalf("Could not initialize plugins: %v", err)
+	}
+	plugin, err := plugMgr.FindPersistentPluginByName("kubernetes.io/fakeAttacher")
 	if err != nil {
 		t.Fatalf("Can't find the plugin by name")
 	}
 	if !volumetest.ContainsAccessMode(plugin.GetAccessModes(), v1.ReadWriteOnce) || !volumetest.ContainsAccessMode(plugin.GetAccessModes(), v1.ReadOnlyMany) {
 		t.Errorf("Expected two AccessModeTypes:  %s and %s", v1.ReadWriteOnce, v1.ReadOnlyMany)
+	}
+}
+
+func GetDynamicPluginProberWithoutWatcher(pluginDir string, runner exec.Interface) volume.DynamicPluginProber {
+	return &flexVolumeProber{
+		pluginDir: pluginDir,
+		watcher:   newFakeWatcher(),
+		factory:   pluginFactory{},
+		runner:    runner,
+		fs:        &utilfs.DefaultFs{},
 	}
 }

@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 /*
@@ -24,7 +25,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	"github.com/google/cadvisor/utils/oomparser"
 )
@@ -72,8 +73,8 @@ func (ow *realWatcher) Start(ref *v1.ObjectReference) error {
 		defer runtime.HandleCrash()
 
 		for event := range outStream {
-			if event.ContainerName == recordEventContainerName {
-				klog.V(1).Infof("Got sys oom event: %v", event)
+			if event.VictimContainerName == recordEventContainerName {
+				klog.V(1).InfoS("Got sys oom event", "event", event)
 				eventMsg := "System OOM encountered"
 				if event.ProcessName != "" && event.Pid != 0 {
 					eventMsg = fmt.Sprintf("%s, victim process: %s, pid: %d", eventMsg, event.ProcessName, event.Pid)
@@ -81,7 +82,7 @@ func (ow *realWatcher) Start(ref *v1.ObjectReference) error {
 				ow.recorder.Eventf(ref, v1.EventTypeWarning, systemOOMEvent, eventMsg)
 			}
 		}
-		klog.Errorf("Unexpectedly stopped receiving OOM notifications")
+		klog.ErrorS(nil, "Unexpectedly stopped receiving OOM notifications")
 	}()
 	return nil
 }

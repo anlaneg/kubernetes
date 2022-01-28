@@ -22,6 +22,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	fuzz "github.com/google/gofuzz"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -30,7 +31,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/util/diff"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 )
 
@@ -46,59 +46,59 @@ func (o orderedGroupVersionKinds) Less(i, j int) bool {
 func TestDefaulting(t *testing.T) {
 	// these are the known types with defaulters - you must add to this list if you add a top level defaulter
 	typesWithDefaulting := map[schema.GroupVersionKind]struct{}{
-		{Group: "", Version: "v1", Kind: "ConfigMap"}:                                             {},
-		{Group: "", Version: "v1", Kind: "ConfigMapList"}:                                         {},
-		{Group: "", Version: "v1", Kind: "Endpoints"}:                                             {},
-		{Group: "", Version: "v1", Kind: "EndpointsList"}:                                         {},
-		{Group: "", Version: "v1", Kind: "EphemeralContainers"}:                                   {},
-		{Group: "", Version: "v1", Kind: "Namespace"}:                                             {},
-		{Group: "", Version: "v1", Kind: "NamespaceList"}:                                         {},
-		{Group: "", Version: "v1", Kind: "Node"}:                                                  {},
-		{Group: "", Version: "v1", Kind: "NodeList"}:                                              {},
-		{Group: "", Version: "v1", Kind: "PersistentVolume"}:                                      {},
-		{Group: "", Version: "v1", Kind: "PersistentVolumeList"}:                                  {},
-		{Group: "", Version: "v1", Kind: "PersistentVolumeClaim"}:                                 {},
-		{Group: "", Version: "v1", Kind: "PersistentVolumeClaimList"}:                             {},
-		{Group: "", Version: "v1", Kind: "Pod"}:                                                   {},
-		{Group: "", Version: "v1", Kind: "PodList"}:                                               {},
-		{Group: "", Version: "v1", Kind: "PodTemplate"}:                                           {},
-		{Group: "", Version: "v1", Kind: "PodTemplateList"}:                                       {},
-		{Group: "", Version: "v1", Kind: "ReplicationController"}:                                 {},
-		{Group: "", Version: "v1", Kind: "ReplicationControllerList"}:                             {},
-		{Group: "", Version: "v1", Kind: "Secret"}:                                                {},
-		{Group: "", Version: "v1", Kind: "SecretList"}:                                            {},
-		{Group: "", Version: "v1", Kind: "Service"}:                                               {},
-		{Group: "", Version: "v1", Kind: "ServiceList"}:                                           {},
-		{Group: "apps", Version: "v1beta1", Kind: "StatefulSet"}:                                  {},
-		{Group: "apps", Version: "v1beta1", Kind: "StatefulSetList"}:                              {},
-		{Group: "apps", Version: "v1beta2", Kind: "StatefulSet"}:                                  {},
-		{Group: "apps", Version: "v1beta2", Kind: "StatefulSetList"}:                              {},
-		{Group: "apps", Version: "v1", Kind: "StatefulSet"}:                                       {},
-		{Group: "apps", Version: "v1", Kind: "StatefulSetList"}:                                   {},
-		{Group: "autoscaling", Version: "v1", Kind: "HorizontalPodAutoscaler"}:                    {},
-		{Group: "autoscaling", Version: "v1", Kind: "HorizontalPodAutoscalerList"}:                {},
-		{Group: "autoscaling", Version: "v2beta1", Kind: "HorizontalPodAutoscaler"}:               {},
-		{Group: "autoscaling", Version: "v2beta1", Kind: "HorizontalPodAutoscalerList"}:           {},
-		{Group: "autoscaling", Version: "v2beta2", Kind: "HorizontalPodAutoscaler"}:               {},
-		{Group: "autoscaling", Version: "v2beta2", Kind: "HorizontalPodAutoscalerList"}:           {},
-		{Group: "batch", Version: "v1", Kind: "Job"}:                                              {},
-		{Group: "batch", Version: "v1", Kind: "JobList"}:                                          {},
-		{Group: "batch", Version: "v1beta1", Kind: "CronJob"}:                                     {},
-		{Group: "batch", Version: "v1beta1", Kind: "CronJobList"}:                                 {},
-		{Group: "batch", Version: "v1beta1", Kind: "JobTemplate"}:                                 {},
-		{Group: "batch", Version: "v2alpha1", Kind: "CronJob"}:                                    {},
-		{Group: "batch", Version: "v2alpha1", Kind: "CronJobList"}:                                {},
-		{Group: "batch", Version: "v2alpha1", Kind: "JobTemplate"}:                                {},
-		{Group: "certificates.k8s.io", Version: "v1beta1", Kind: "CertificateSigningRequest"}:     {},
-		{Group: "certificates.k8s.io", Version: "v1beta1", Kind: "CertificateSigningRequestList"}: {},
-		{Group: "discovery.k8s.io", Version: "v1alpha1", Kind: "EndpointSlice"}:                   {},
-		{Group: "discovery.k8s.io", Version: "v1alpha1", Kind: "EndpointSliceList"}:               {},
-		{Group: "discovery.k8s.io", Version: "v1beta1", Kind: "EndpointSlice"}:                    {},
-		{Group: "discovery.k8s.io", Version: "v1beta1", Kind: "EndpointSliceList"}:                {},
-		{Group: "kubeadm.k8s.io", Version: "v1alpha1", Kind: "MasterConfiguration"}:               {},
-		// This object contains only int fields which currently breaks the defaulting test because
-		// it's pretty stupid. Once we add non integer fields, we should uncomment this.
-		// {Group: "kubeadm.k8s.io", Version: "v1alpha1", Kind: "NodeConfiguration"}:                 {},
+		{Group: "", Version: "v1", Kind: "ConfigMap"}:                                                           {},
+		{Group: "", Version: "v1", Kind: "ConfigMapList"}:                                                       {},
+		{Group: "", Version: "v1", Kind: "Endpoints"}:                                                           {},
+		{Group: "", Version: "v1", Kind: "EndpointsList"}:                                                       {},
+		{Group: "", Version: "v1", Kind: "EphemeralContainers"}:                                                 {},
+		{Group: "", Version: "v1", Kind: "Namespace"}:                                                           {},
+		{Group: "", Version: "v1", Kind: "NamespaceList"}:                                                       {},
+		{Group: "", Version: "v1", Kind: "Node"}:                                                                {},
+		{Group: "", Version: "v1", Kind: "NodeList"}:                                                            {},
+		{Group: "", Version: "v1", Kind: "PersistentVolume"}:                                                    {},
+		{Group: "", Version: "v1", Kind: "PersistentVolumeList"}:                                                {},
+		{Group: "", Version: "v1", Kind: "PersistentVolumeClaim"}:                                               {},
+		{Group: "", Version: "v1", Kind: "PersistentVolumeClaimList"}:                                           {},
+		{Group: "", Version: "v1", Kind: "Pod"}:                                                                 {},
+		{Group: "", Version: "v1", Kind: "PodList"}:                                                             {},
+		{Group: "", Version: "v1", Kind: "PodTemplate"}:                                                         {},
+		{Group: "", Version: "v1", Kind: "PodTemplateList"}:                                                     {},
+		{Group: "", Version: "v1", Kind: "ReplicationController"}:                                               {},
+		{Group: "", Version: "v1", Kind: "ReplicationControllerList"}:                                           {},
+		{Group: "", Version: "v1", Kind: "Secret"}:                                                              {},
+		{Group: "", Version: "v1", Kind: "SecretList"}:                                                          {},
+		{Group: "", Version: "v1", Kind: "Service"}:                                                             {},
+		{Group: "", Version: "v1", Kind: "ServiceList"}:                                                         {},
+		{Group: "apps", Version: "v1beta1", Kind: "StatefulSet"}:                                                {},
+		{Group: "apps", Version: "v1beta1", Kind: "StatefulSetList"}:                                            {},
+		{Group: "apps", Version: "v1beta2", Kind: "StatefulSet"}:                                                {},
+		{Group: "apps", Version: "v1beta2", Kind: "StatefulSetList"}:                                            {},
+		{Group: "apps", Version: "v1", Kind: "StatefulSet"}:                                                     {},
+		{Group: "apps", Version: "v1", Kind: "StatefulSetList"}:                                                 {},
+		{Group: "autoscaling", Version: "v1", Kind: "HorizontalPodAutoscaler"}:                                  {},
+		{Group: "autoscaling", Version: "v1", Kind: "HorizontalPodAutoscalerList"}:                              {},
+		{Group: "autoscaling", Version: "v2", Kind: "HorizontalPodAutoscaler"}:                                  {},
+		{Group: "autoscaling", Version: "v2", Kind: "HorizontalPodAutoscalerList"}:                              {},
+		{Group: "autoscaling", Version: "v2beta1", Kind: "HorizontalPodAutoscaler"}:                             {},
+		{Group: "autoscaling", Version: "v2beta1", Kind: "HorizontalPodAutoscalerList"}:                         {},
+		{Group: "autoscaling", Version: "v2beta2", Kind: "HorizontalPodAutoscaler"}:                             {},
+		{Group: "autoscaling", Version: "v2beta2", Kind: "HorizontalPodAutoscalerList"}:                         {},
+		{Group: "batch", Version: "v1", Kind: "CronJob"}:                                                        {},
+		{Group: "batch", Version: "v1", Kind: "CronJobList"}:                                                    {},
+		{Group: "batch", Version: "v1", Kind: "Job"}:                                                            {},
+		{Group: "batch", Version: "v1", Kind: "JobList"}:                                                        {},
+		{Group: "batch", Version: "v1beta1", Kind: "CronJob"}:                                                   {},
+		{Group: "batch", Version: "v1beta1", Kind: "CronJobList"}:                                               {},
+		{Group: "batch", Version: "v1beta1", Kind: "JobTemplate"}:                                               {},
+		{Group: "batch", Version: "v2alpha1", Kind: "CronJob"}:                                                  {},
+		{Group: "batch", Version: "v2alpha1", Kind: "CronJobList"}:                                              {},
+		{Group: "batch", Version: "v2alpha1", Kind: "JobTemplate"}:                                              {},
+		{Group: "certificates.k8s.io", Version: "v1beta1", Kind: "CertificateSigningRequest"}:                   {},
+		{Group: "certificates.k8s.io", Version: "v1beta1", Kind: "CertificateSigningRequestList"}:               {},
+		{Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSlice"}:                                       {},
+		{Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSliceList"}:                                   {},
+		{Group: "discovery.k8s.io", Version: "v1beta1", Kind: "EndpointSlice"}:                                  {},
+		{Group: "discovery.k8s.io", Version: "v1beta1", Kind: "EndpointSliceList"}:                              {},
 		{Group: "extensions", Version: "v1beta1", Kind: "DaemonSet"}:                                            {},
 		{Group: "extensions", Version: "v1beta1", Kind: "DaemonSetList"}:                                        {},
 		{Group: "apps", Version: "v1beta2", Kind: "DaemonSet"}:                                                  {},
@@ -139,8 +139,6 @@ func TestDefaulting(t *testing.T) {
 		{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBindingList"}:                     {},
 		{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "RoleBinding"}:                                {},
 		{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "RoleBindingList"}:                            {},
-		{Group: "settings.k8s.io", Version: "v1alpha1", Kind: "PodPreset"}:                                      {},
-		{Group: "settings.k8s.io", Version: "v1alpha1", Kind: "PodPresetList"}:                                  {},
 		{Group: "admissionregistration.k8s.io", Version: "v1beta1", Kind: "ValidatingWebhookConfiguration"}:     {},
 		{Group: "admissionregistration.k8s.io", Version: "v1beta1", Kind: "ValidatingWebhookConfigurationList"}: {},
 		{Group: "admissionregistration.k8s.io", Version: "v1beta1", Kind: "MutatingWebhookConfiguration"}:       {},
@@ -149,12 +147,12 @@ func TestDefaulting(t *testing.T) {
 		{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "ValidatingWebhookConfigurationList"}:      {},
 		{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "MutatingWebhookConfiguration"}:            {},
 		{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "MutatingWebhookConfigurationList"}:        {},
-		{Group: "auditregistration.k8s.io", Version: "v1alpha1", Kind: "AuditSink"}:                             {},
-		{Group: "auditregistration.k8s.io", Version: "v1alpha1", Kind: "AuditSinkList"}:                         {},
 		{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"}:                                      {},
 		{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicyList"}:                                  {},
 		{Group: "networking.k8s.io", Version: "v1beta1", Kind: "Ingress"}:                                       {},
 		{Group: "networking.k8s.io", Version: "v1beta1", Kind: "IngressList"}:                                   {},
+		{Group: "networking.k8s.io", Version: "v1", Kind: "IngressClass"}:                                       {},
+		{Group: "networking.k8s.io", Version: "v1", Kind: "IngressClassList"}:                                   {},
 		{Group: "storage.k8s.io", Version: "v1beta1", Kind: "StorageClass"}:                                     {},
 		{Group: "storage.k8s.io", Version: "v1beta1", Kind: "StorageClassList"}:                                 {},
 		{Group: "storage.k8s.io", Version: "v1beta1", Kind: "CSIDriver"}:                                        {},
@@ -168,6 +166,12 @@ func TestDefaulting(t *testing.T) {
 		{Group: "storage.k8s.io", Version: "v1beta1", Kind: "VolumeAttachment"}:                                 {},
 		{Group: "storage.k8s.io", Version: "v1beta1", Kind: "VolumeAttachmentList"}:                             {},
 		{Group: "authentication.k8s.io", Version: "v1", Kind: "TokenRequest"}:                                   {},
+		{Group: "scheduling.k8s.io", Version: "v1alpha1", Kind: "PriorityClass"}:                                {},
+		{Group: "scheduling.k8s.io", Version: "v1beta1", Kind: "PriorityClass"}:                                 {},
+		{Group: "scheduling.k8s.io", Version: "v1", Kind: "PriorityClass"}:                                      {},
+		{Group: "scheduling.k8s.io", Version: "v1alpha1", Kind: "PriorityClassList"}:                            {},
+		{Group: "scheduling.k8s.io", Version: "v1beta1", Kind: "PriorityClassList"}:                             {},
+		{Group: "scheduling.k8s.io", Version: "v1", Kind: "PriorityClassList"}:                                  {},
 	}
 
 	f := fuzz.New().NilChance(.5).NumElements(1, 1).RandSource(rand.NewSource(1))
@@ -233,7 +237,7 @@ func TestDefaulting(t *testing.T) {
 			if !reflect.DeepEqual(original, withDefaults) {
 				changedOnce = true
 				if !expectedChanged {
-					t.Errorf("{Group: \"%s\", Version: \"%s\", Kind: \"%s\"} did not expect defaults to be set - update expected or check defaulter registering: %s", gvk.Group, gvk.Version, gvk.Kind, diff.ObjectReflectDiff(original, withDefaults))
+					t.Errorf("{Group: \"%s\", Version: \"%s\", Kind: \"%s\"} did not expect defaults to be set - update expected or check defaulter registering: %s", gvk.Group, gvk.Version, gvk.Kind, cmp.Diff(original, withDefaults))
 				}
 			}
 		}

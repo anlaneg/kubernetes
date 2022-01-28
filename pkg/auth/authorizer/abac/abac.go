@@ -24,7 +24,7 @@ import (
 	"os"
 	"strings"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -164,6 +164,7 @@ func subjectMatches(p abac.Policy, user user.Info) bool {
 			for _, group := range groups {
 				if p.Spec.Group == group {
 					matched = true
+					break
 				}
 			}
 			if !matched {

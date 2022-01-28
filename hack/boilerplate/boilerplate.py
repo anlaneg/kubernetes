@@ -155,7 +155,7 @@ def file_extension(filename):
     return os.path.splitext(filename)[1].split(".")[-1].lower()
 
 
-skipped_dirs = ['Godeps', 'third_party', '_gopath', '_output', '.git', 'cluster/env.sh',
+skipped_dirs = ['third_party', '_gopath', '_output', '.git', 'cluster/env.sh',
                 "vendor", "test/e2e/generated/bindata.go", "hack/boilerplate/test",
                 "staging/src/k8s.io/kubectl/pkg/generated/bindata.go"]
 
@@ -216,9 +216,11 @@ def get_regexs():
     # get_dates return 2014, 2015, 2016, 2017, or 2018 until the current year as a regex like: "(2014|2015|2016|2017|2018)";
     # company holder names can be anything
     regexs["date"] = re.compile(get_dates())
-    # strip // +build \n\n build constraints
+    # strip the following build constraints/tags:
+    # //go:build
+    # // +build \n\n
     regexs["go_build_constraints"] = re.compile(
-        r"^(// \+build.*\n)+\n", re.MULTILINE)
+        r"^(//(go:build| \+build).*\n)+\n", re.MULTILINE)
     # strip #!.* from scripts
     regexs["shebang"] = re.compile(r"^(#!.*\n)\n*", re.MULTILINE)
     # Search for generated files

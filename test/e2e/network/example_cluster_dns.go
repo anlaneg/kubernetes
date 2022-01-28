@@ -34,8 +34,11 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2enetwork "k8s.io/kubernetes/test/e2e/framework/network"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
+	e2eresource "k8s.io/kubernetes/test/e2e/framework/resource"
 	e2eservice "k8s.io/kubernetes/test/e2e/framework/service"
+	"k8s.io/kubernetes/test/e2e/network/common"
 )
 
 const (
@@ -53,7 +56,7 @@ try:
 except:
 	print('err')`
 
-var _ = SIGDescribe("ClusterDns [Feature:Example]", func() {
+var _ = common.SIGDescribe("ClusterDns [Feature:Example]", func() {
 	f := framework.NewDefaultFramework("cluster-dns")
 
 	var c clientset.Interface
@@ -102,8 +105,8 @@ var _ = SIGDescribe("ClusterDns [Feature:Example]", func() {
 
 		// wait for objects
 		for _, ns := range namespaces {
-			e2epod.WaitForControlledPodsRunning(c, ns.Name, backendRcName, api.Kind("ReplicationController"))
-			framework.WaitForService(c, ns.Name, backendSvcName, true, framework.Poll, framework.ServiceStartTimeout)
+			e2eresource.WaitForControlledPodsRunning(c, ns.Name, backendRcName, api.Kind("ReplicationController"))
+			e2enetwork.WaitForService(c, ns.Name, backendSvcName, true, framework.Poll, framework.ServiceStartTimeout)
 		}
 		// it is not enough that pods are running because they may be set to running, but
 		// the application itself may have not been initialized. Just query the application.

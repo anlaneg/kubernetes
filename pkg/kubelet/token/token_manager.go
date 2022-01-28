@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -29,15 +30,16 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 )
 
 const (
-	maxTTL   = 24 * time.Hour
-	gcPeriod = time.Minute
+	maxTTL    = 24 * time.Hour
+	gcPeriod  = time.Minute
+	maxJitter = 10 * time.Second
 )
 
 // NewManager returns a new token manager.
@@ -116,7 +118,7 @@ func (m *Manager) GetServiceAccountToken(namespace, name string, tr *authenticat
 		case m.expired(ctr):
 			return nil, fmt.Errorf("token %s expired and refresh failed: %v", key, err)
 		default:
-			klog.Errorf("couldn't update token %s: %v", key, err)
+			klog.ErrorS(err, "Couldn't update token", "cacheKey", key)
 			return ctr, nil
 		}
 	}
@@ -168,18 +170,21 @@ func (m *Manager) expired(t *authenticationv1.TokenRequest) bool {
 // ttl, or if the token is older than 24 hours.
 func (m *Manager) requiresRefresh(tr *authenticationv1.TokenRequest) bool {
 	if tr.Spec.ExpirationSeconds == nil {
-		klog.Errorf("expiration seconds was nil for tr: %#v", tr)
+		cpy := tr.DeepCopy()
+		cpy.Status.Token = ""
+		klog.ErrorS(nil, "Expiration seconds was nil for token request", "tokenRequest", cpy)
 		return false
 	}
 	now := m.clock.Now()
 	exp := tr.Status.ExpirationTimestamp.Time
 	iat := exp.Add(-1 * time.Duration(*tr.Spec.ExpirationSeconds) * time.Second)
 
-	if now.After(iat.Add(maxTTL)) {
+	jitter := time.Duration(rand.Float64()*maxJitter.Seconds()) * time.Second
+	if now.After(iat.Add(maxTTL - jitter)) {
 		return true
 	}
-	// Require a refresh if within 20% of the TTL from the expiration time.
-	if now.After(exp.Add(-1 * time.Duration((*tr.Spec.ExpirationSeconds*20)/100) * time.Second)) {
+	// Require a refresh if within 20% of the TTL plus a jitter from the expiration time.
+	if now.After(exp.Add(-1*time.Duration((*tr.Spec.ExpirationSeconds*20)/100)*time.Second - jitter)) {
 		return true
 	}
 	return false

@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	registerapi "k8s.io/kubelet/pkg/apis/pluginregistration/v1"
 	v1beta1 "k8s.io/kubernetes/pkg/kubelet/pluginmanager/pluginwatcher/example_plugin_apis/v1beta1"
@@ -121,7 +121,7 @@ func (p *exampleHandler) EventChan(pluginName string) chan examplePluginEvent {
 }
 
 func (p *exampleHandler) SendEvent(pluginName string, event examplePluginEvent) {
-	klog.V(2).Infof("Sending %v for plugin %s over chan %v", event, pluginName, p.eventChans[pluginName])
+	klog.V(2).InfoS("Sending event for plugin", "pluginName", pluginName, "event", event, "channel", p.eventChans[pluginName])
 	p.eventChans[pluginName] <- event
 }
 

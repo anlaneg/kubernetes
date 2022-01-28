@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 /*
@@ -24,10 +25,11 @@ import (
 	"path"
 	"testing"
 
+	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"k8s.io/utils/mount"
+	"k8s.io/mount-utils"
 )
 
 func fakeContainerMgrMountInt() mount.Interface {
@@ -58,11 +60,18 @@ func fakeContainerMgrMountInt() mount.Interface {
 
 func TestCgroupMountValidationSuccess(t *testing.T) {
 	f, err := validateSystemRequirements(fakeContainerMgrMountInt())
-	assert.Nil(t, err)
-	assert.False(t, f.cpuHardcapping, "cpu hardcapping is expected to be disabled")
+	assert.NoError(t, err)
+	if cgroups.IsCgroup2UnifiedMode() {
+		assert.True(t, f.cpuHardcapping, "cpu hardcapping is expected to be enabled")
+	} else {
+		assert.False(t, f.cpuHardcapping, "cpu hardcapping is expected to be disabled")
+	}
 }
 
 func TestCgroupMountValidationMemoryMissing(t *testing.T) {
+	if cgroups.IsCgroup2UnifiedMode() {
+		t.Skip("skipping cgroup v1 test on a cgroup v2 system")
+	}
 	mountInt := mount.NewFakeMounter(
 		[]mount.MountPoint{
 			{
@@ -86,6 +95,9 @@ func TestCgroupMountValidationMemoryMissing(t *testing.T) {
 }
 
 func TestCgroupMountValidationMultipleSubsystem(t *testing.T) {
+	if cgroups.IsCgroup2UnifiedMode() {
+		t.Skip("skipping cgroup v1 test on a cgroup v2 system")
+	}
 	mountInt := mount.NewFakeMounter(
 		[]mount.MountPoint{
 			{
@@ -105,10 +117,26 @@ func TestCgroupMountValidationMultipleSubsystem(t *testing.T) {
 			},
 		})
 	_, err := validateSystemRequirements(mountInt)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
+}
+
+func TestGetCpuWeight(t *testing.T) {
+	assert.Equal(t, uint64(0), getCpuWeight(nil))
+
+	v := uint64(2)
+	assert.Equal(t, uint64(1), getCpuWeight(&v))
+
+	v = uint64(262144)
+	assert.Equal(t, uint64(10000), getCpuWeight(&v))
+
+	v = uint64(1000000000)
+	assert.Equal(t, uint64(10000), getCpuWeight(&v))
 }
 
 func TestSoftRequirementsValidationSuccess(t *testing.T) {
+	if cgroups.IsCgroup2UnifiedMode() {
+		t.Skip("skipping cgroup v1 test on a cgroup v2 system")
+	}
 	req := require.New(t)
 	tempDir, err := ioutil.TempDir("", "")
 	req.NoError(err)

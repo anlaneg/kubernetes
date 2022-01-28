@@ -32,10 +32,9 @@ var DefaultSysSpec = SysSpec{
 		Optional:  []KernelConfig{},
 		Forbidden: []KernelConfig{},
 	},
-	Cgroups: []string{},
 	RuntimeSpec: RuntimeSpec{
 		DockerSpec: &DockerSpec{
-			Version:     []string{`18\.0[6,9]\..*`},
+			Version:     []string{`18\.0[6,9]\..*`, `19\.03\..*`},
 			GraphDriver: []string{"windowsfilter"},
 		},
 	},

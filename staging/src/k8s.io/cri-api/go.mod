@@ -2,24 +2,21 @@
 
 module k8s.io/cri-api
 
-go 1.13
+go 1.16
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/gogo/protobuf v1.3.1
-	github.com/google/go-cmp v0.3.0 // indirect
-	github.com/kr/pretty v0.1.0 // indirect
-	github.com/stretchr/testify v1.4.0
-	golang.org/x/net v0.0.0-20191004110552-13f9640d40b9 // indirect
-	golang.org/x/sys v0.0.0-20191022100944-742c48ecaeb7 // indirect
-	golang.org/x/text v0.3.2 // indirect
-	google.golang.org/grpc v1.26.0
-	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
-	gopkg.in/yaml.v2 v2.2.8 // indirect
+	github.com/gogo/protobuf v1.3.2
+	github.com/kr/text v0.2.0 // indirect
+	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
+	github.com/stretchr/testify v1.7.0
+	golang.org/x/net v0.0.0-20211209124913-491a49abca63 // indirect
+	golang.org/x/sys v0.0.0-20220114195835-da31bd327af9 // indirect
+	golang.org/x/text v0.3.7 // indirect
+	google.golang.org/genproto v0.0.0-20210831024726-fe130286e0e2 // indirect
+	google.golang.org/grpc v1.40.0
+	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
+	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
 
-replace (
-	golang.org/x/sys => golang.org/x/sys v0.0.0-20190813064441-fde4db37ae7a // pinned to release-branch.go1.13
-	golang.org/x/tools => golang.org/x/tools v0.0.0-20190821162956-65e3620a7ae7 // pinned to release-branch.go1.13
-	k8s.io/cri-api => ../cri-api
-)
+replace k8s.io/cri-api => ../cri-api

@@ -22,8 +22,7 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
-	batchv1beta1 "k8s.io/api/batch/v1beta1"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,7 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 
 	"github.com/onsi/ginkgo"
 	imageutils "k8s.io/kubernetes/test/utils/image"
@@ -53,7 +52,7 @@ func testingPod(name, value string) v1.Pod {
 					Image: imageutils.GetE2EImage(imageutils.Nginx),
 					Ports: []v1.ContainerPort{{ContainerPort: 80}},
 					LivenessProbe: &v1.Probe{
-						Handler: v1.Handler{
+						ProbeHandler: v1.ProbeHandler{
 							HTTPGet: &v1.HTTPGetAction{
 								Path: "/index.html",
 								Port: intstr.FromInt(8080),
@@ -147,7 +146,7 @@ var _ = SIGDescribe("Generated clientset", func() {
 
 		// We need to wait for the pod to be scheduled, otherwise the deletion
 		// will be carried out immediately rather than gracefully.
-		framework.ExpectNoError(f.WaitForPodRunning(pod.Name))
+		framework.ExpectNoError(e2epod.WaitForPodNameRunningInNamespace(f.ClientSet, pod.Name, f.Namespace.Name))
 
 		ginkgo.By("deleting the pod gracefully")
 		gracePeriod := int64(31)
@@ -163,20 +162,20 @@ var _ = SIGDescribe("Generated clientset", func() {
 	})
 })
 
-func newTestingCronJob(name string, value string) *batchv1beta1.CronJob {
+func newTestingCronJob(name string, value string) *batchv1.CronJob {
 	parallelism := int32(1)
 	completions := int32(1)
-	return &batchv1beta1.CronJob{
+	return &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			Labels: map[string]string{
 				"time": value,
 			},
 		},
-		Spec: batchv1beta1.CronJobSpec{
+		Spec: batchv1.CronJobSpec{
 			Schedule:          "*/1 * * * ?",
-			ConcurrencyPolicy: batchv1beta1.AllowConcurrent,
-			JobTemplate: batchv1beta1.JobTemplateSpec{
+			ConcurrencyPolicy: batchv1.AllowConcurrent,
+			JobTemplate: batchv1.JobTemplateSpec{
 				Spec: batchv1.JobSpec{
 					Parallelism: &parallelism,
 					Completions: &completions,
@@ -214,12 +213,8 @@ func newTestingCronJob(name string, value string) *batchv1beta1.CronJob {
 var _ = SIGDescribe("Generated clientset", func() {
 	f := framework.NewDefaultFramework("clientset")
 
-	ginkgo.BeforeEach(func() {
-		e2eskipper.SkipIfMissingResource(f.DynamicClient, CronJobGroupVersionResource, f.Namespace.Name)
-	})
-
-	ginkgo.It("should create v1beta1 cronJobs, delete cronJobs, watch cronJobs", func() {
-		cronJobClient := f.ClientSet.BatchV1beta1().CronJobs(f.Namespace.Name)
+	ginkgo.It("should create v1 cronJobs, delete cronJobs, watch cronJobs", func() {
+		cronJobClient := f.ClientSet.BatchV1().CronJobs(f.Namespace.Name)
 		ginkgo.By("constructing the cronJob")
 		name := "cronjob" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())

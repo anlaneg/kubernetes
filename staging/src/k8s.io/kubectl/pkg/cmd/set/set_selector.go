@@ -20,7 +20,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -46,6 +46,7 @@ type SetSelectorOptions struct {
 	RecordFlags          *genericclioptions.RecordFlags
 	dryRunStrategy       cmdutil.DryRunStrategy
 	dryRunVerifier       *resource.DryRunVerifier
+	fieldManager         string
 
 	// set by args
 	resources       []string
@@ -63,15 +64,15 @@ type SetSelectorOptions struct {
 }
 
 var (
-	selectorLong = templates.LongDesc(`
+	selectorLong = templates.LongDesc(i18n.T(`
 		Set the selector on a resource. Note that the new selector will overwrite the old selector if the resource had one prior to the invocation
 		of 'set selector'.
 
 		A selector must begin with a letter or number, and may contain letters, numbers, hyphens, dots, and underscores, up to %[1]d characters.
 		If --resource-version is specified, then updates will use this resource version, otherwise the existing resource-version will be used.
-        Note: currently selectors can only be set on Service objects.`)
+        Note: currently selectors can only be set on Service objects.`))
 	selectorExample = templates.Examples(`
-        # set the labels and selector before creating a deployment/service pair.
+        # Set the labels and selector before creating a deployment/service pair
         kubectl create service clusterip my-svc --clusterip="None" -o yaml --dry-run=client | kubectl set selector --local -f - 'environment=qa' -o yaml | kubectl create -f -
         kubectl create deployment my-dep -o yaml --dry-run=client | kubectl label --local -f - environment=qa -o yaml | kubectl create -f -`)
 )
@@ -113,6 +114,7 @@ func NewCmdSelector(f cmdutil.Factory, streams genericclioptions.IOStreams) *cob
 	o.ResourceBuilderFlags.AddFlags(cmd.Flags())
 	o.PrintFlags.AddFlags(cmd)
 	o.RecordFlags.AddFlags(cmd)
+	cmdutil.AddFieldManagerFlagVar(cmd, &o.fieldManager, "kubectl-set")
 
 	cmd.Flags().StringVarP(&o.resourceVersion, "resource-version", "", o.resourceVersion, "If non-empty, the selectors update will only succeed if this is the current resource-version for the object. Only valid when specifying a single resource.")
 	cmdutil.AddDryRunFlag(cmd)
@@ -138,11 +140,7 @@ func (o *SetSelectorOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, arg
 	if err != nil {
 		return err
 	}
-	discoveryClient, err := f.ToDiscoveryClient()
-	if err != nil {
-		return err
-	}
-	o.dryRunVerifier = resource.NewDryRunVerifier(dynamicClient, discoveryClient)
+	o.dryRunVerifier = resource.NewDryRunVerifier(dynamicClient, f.OpenAPIGetter())
 
 	o.resources, o.selector, err = getResourcesAndSelector(args)
 	if err != nil {
@@ -175,6 +173,9 @@ func (o *SetSelectorOptions) RunSelector() error {
 	r := o.ResourceFinder.Do()
 
 	return r.Visit(func(info *resource.Info, err error) error {
+		if err != nil {
+			return err
+		}
 		patch := &Patch{Info: info}
 
 		if len(o.resourceVersion) != 0 {
@@ -224,6 +225,7 @@ func (o *SetSelectorOptions) RunSelector() error {
 		actual, err := resource.
 			NewHelper(info.Client, info.Mapping).
 			DryRun(o.dryRunStrategy == cmdutil.DryRunServer).
+			WithFieldManager(o.fieldManager).
 			Patch(info.Namespace, info.Name, types.StrategicMergePatchType, patch.Patch, nil)
 		if err != nil {
 			return err
