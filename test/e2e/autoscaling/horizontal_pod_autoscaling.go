@@ -19,6 +19,8 @@ package autoscaling
 import (
 	"time"
 
+	"k8s.io/pod-security-admission/api"
+
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2eautoscaling "k8s.io/kubernetes/test/e2e/framework/autoscaling"
@@ -30,6 +32,7 @@ import (
 //
 var _ = SIGDescribe("[Feature:HPA] Horizontal pod autoscaling (scale resource: CPU)", func() {
 	f := framework.NewDefaultFramework("horizontal-pod-autoscaling")
+	f.NamespacePodSecurityEnforceLevel = api.LevelBaseline
 
 	titleUp := "Should scale from 1 pod to 3 pods and from 3 to 5"
 	titleDown := "Should scale from 5 pods to 3 pods and from 3 to 1"
