@@ -23,12 +23,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/util/diff"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/admission"
@@ -53,7 +53,7 @@ func newHandlerForTestWithClock(c clientset.Interface, cacheClock clock.Clock) (
 	if err != nil {
 		return nil, f, err
 	}
-	pluginInitializer := kubeadmission.New(c, f, nil, nil, nil)
+	pluginInitializer := kubeadmission.New(c, nil, f, nil, nil, nil)
 	pluginInitializer.Initialize(handler)
 	err = admission.ValidateInitialization(handler)
 	return handler, f, err
@@ -202,7 +202,7 @@ func TestAdmissionNamespaceTerminating(t *testing.T) {
 		Field:   "metadata.namespace",
 	}
 	if cause, ok := errors.StatusCause(err, v1.NamespaceTerminatingCause); !ok || !reflect.DeepEqual(expectedCause, cause) {
-		t.Errorf("Expected status cause indicating the namespace is terminating: %t %s", ok, diff.ObjectReflectDiff(expectedCause, cause))
+		t.Errorf("Expected status cause indicating the namespace is terminating: %t %s", ok, cmp.Diff(expectedCause, cause))
 	}
 
 	// verify update operations in the namespace can proceed

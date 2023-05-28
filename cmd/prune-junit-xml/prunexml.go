@@ -29,33 +29,30 @@ import (
 func main() {
 	maxTextSize := flag.Int("max-text-size", 1, "maximum size of attribute or text (in MB)")
 	flag.Parse()
-
-	if flag.NArg() > 0 {
-		for _, path := range flag.Args() {
-			fmt.Printf("processing junit xml file : %s\n", path)
-			xmlReader, err := os.Open(path)
-			if err != nil {
-				panic(err)
-			}
-			defer xmlReader.Close()
-			suites, err := fetchXML(xmlReader) // convert MB into bytes (roughly!)
-			if err != nil {
-				panic(err)
-			}
-
-			pruneXML(suites, *maxTextSize*1e6) // convert MB into bytes (roughly!)
-
-			xmlWriter, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
-			if err != nil {
-				panic(err)
-			}
-			defer xmlWriter.Close()
-			err = streamXML(xmlWriter, suites)
-			if err != nil {
-				panic(err)
-			}
-			fmt.Println("done.")
+	for _, path := range flag.Args() {
+		fmt.Printf("processing junit xml file : %s\n", path)
+		xmlReader, err := os.Open(path)
+		if err != nil {
+			panic(err)
 		}
+		defer xmlReader.Close()
+		suites, err := fetchXML(xmlReader) // convert MB into bytes (roughly!)
+		if err != nil {
+			panic(err)
+		}
+
+		pruneXML(suites, *maxTextSize*1e6) // convert MB into bytes (roughly!)
+
+		xmlWriter, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+		if err != nil {
+			panic(err)
+		}
+		defer xmlWriter.Close()
+		err = streamXML(xmlWriter, suites)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("done.")
 	}
 }
 
@@ -65,15 +62,17 @@ func pruneXML(suites *junitxml.JUnitTestSuites, maxBytes int) {
 			if testcase.SkipMessage != nil {
 				if len(testcase.SkipMessage.Message) > maxBytes {
 					fmt.Printf("clipping skip message in test case : %s\n", testcase.Name)
-					testcase.SkipMessage.Message = "[... clipped...]" +
-						testcase.SkipMessage.Message[len(testcase.SkipMessage.Message)-maxBytes:]
+					head := testcase.SkipMessage.Message[:maxBytes/2]
+					tail := testcase.SkipMessage.Message[len(testcase.SkipMessage.Message)-maxBytes/2:]
+					testcase.SkipMessage.Message = head + "[...clipped...]" + tail
 				}
 			}
 			if testcase.Failure != nil {
 				if len(testcase.Failure.Contents) > maxBytes {
 					fmt.Printf("clipping failure message in test case : %s\n", testcase.Name)
-					testcase.Failure.Contents = "[... clipped...]" +
-						testcase.Failure.Contents[len(testcase.Failure.Contents)-maxBytes:]
+					head := testcase.Failure.Contents[:maxBytes/2]
+					tail := testcase.Failure.Contents[len(testcase.Failure.Contents)-maxBytes/2:]
+					testcase.Failure.Contents = head + "[...clipped...]" + tail
 				}
 			}
 		}

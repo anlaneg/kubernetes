@@ -42,7 +42,7 @@ var (
 		Install the kube-proxy addon components via the API server.
 		`)
 
-	printManifest bool = false
+	printManifest = false
 )
 
 // NewAddonPhase returns the addon Cobra command
@@ -127,6 +127,7 @@ func getAddonPhaseFlags(name string) []string {
 		options.KubeconfigPath,
 		options.KubernetesVersion,
 		options.ImageRepository,
+		options.DryRun,
 	}
 	if name == "all" || name == "kube-proxy" {
 		flags = append(flags,

@@ -20,12 +20,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -35,11 +35,11 @@ import (
 )
 
 func createProductNameFile() (string, error) {
-	file, err := ioutil.TempFile("", "")
+	file, err := os.CreateTemp("", "")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temporary test file: %v", err)
 	}
-	return file.Name(), ioutil.WriteFile(file.Name(), []byte("Google"), 0600)
+	return file.Name(), os.WriteFile(file.Name(), []byte("Google"), 0600)
 }
 
 // The tests here are run in this fashion to ensure TestAllProvidersNoMetadata
@@ -47,6 +47,12 @@ func createProductNameFile() (string, error) {
 // referenced by gceProductNameFile being removed, which is the opposite of
 // the other tests
 func TestMetadata(t *testing.T) {
+	// This test requires onGCEVM to return True. On Linux, this can be faked by creating a
+	// Product Name File. But on Windows, onGCEVM makes the following syscall instead:
+	// wmic computersystem get model
+	if runtime.GOOS == "windows" && !onGCEVM() {
+		t.Skip("Skipping test on Windows, not on GCE.")
+	}
 	var err error
 	gceProductNameFile, err = createProductNameFile()
 	if err != nil {

@@ -26,11 +26,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/util/diff"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
@@ -44,7 +44,7 @@ import (
 	api "k8s.io/kubernetes/pkg/apis/core"
 	controllerpkg "k8s.io/kubernetes/pkg/controller"
 	utilnet "k8s.io/utils/net"
-	utilpointer "k8s.io/utils/pointer"
+	"k8s.io/utils/pointer"
 )
 
 var alwaysReady = func() bool { return true }
@@ -355,7 +355,7 @@ func TestSyncEndpointsWithPodResourceVersionUpdateOnly(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{"foo": "bar"},
-			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
+			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)}},
 		},
 	})
 	pod0.ResourceVersion = "3"
@@ -429,7 +429,7 @@ func TestSyncEndpointsProtocolTCP(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{},
-			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(8080), Protocol: "TCP"}},
+			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt32(8080), Protocol: "TCP"}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -479,6 +479,75 @@ func TestSyncEndpointsHeadlessServiceLabel(t *testing.T) {
 	endpointsHandler.ValidateRequestCount(t, 0)
 }
 
+func TestSyncServiceExternalNameType(t *testing.T) {
+	serviceName := "testing-1"
+	namespace := metav1.NamespaceDefault
+
+	testCases := []struct {
+		desc    string
+		service *v1.Service
+	}{
+		{
+			desc: "External name with selector and ports should not receive endpoints",
+			service: &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespace},
+				Spec: v1.ServiceSpec{
+					Selector: map[string]string{"foo": "bar"},
+					Ports:    []v1.ServicePort{{Port: 80}},
+					Type:     v1.ServiceTypeExternalName,
+				},
+			},
+		},
+		{
+			desc: "External name with ports should not receive endpoints",
+			service: &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespace},
+				Spec: v1.ServiceSpec{
+					Ports: []v1.ServicePort{{Port: 80}},
+					Type:  v1.ServiceTypeExternalName,
+				},
+			},
+		},
+		{
+			desc: "External name with selector should not receive endpoints",
+			service: &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespace},
+				Spec: v1.ServiceSpec{
+					Selector: map[string]string{"foo": "bar"},
+					Type:     v1.ServiceTypeExternalName,
+				},
+			},
+		},
+		{
+			desc: "External name without selector and ports should not receive endpoints",
+			service: &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespace},
+				Spec: v1.ServiceSpec{
+					Type: v1.ServiceTypeExternalName,
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			testServer, endpointsHandler := makeTestServer(t, namespace)
+
+			defer testServer.Close()
+			endpoints := newController(testServer.URL, 0*time.Second)
+			err := endpoints.serviceStore.Add(tc.service)
+			if err != nil {
+				t.Fatalf("Error adding service to service store: %v", err)
+			}
+			err = endpoints.syncService(context.TODO(), namespace+"/"+serviceName)
+			if err != nil {
+				t.Fatalf("Error syncing service: %v", err)
+			}
+			endpointsHandler.ValidateRequestCount(t, 0)
+		})
+	}
+}
+
 func TestSyncEndpointsProtocolUDP(t *testing.T) {
 	ns := "other"
 	testServer, endpointsHandler := makeTestServer(t, ns)
@@ -500,7 +569,7 @@ func TestSyncEndpointsProtocolUDP(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{},
-			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(8080), Protocol: "UDP"}},
+			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt32(8080), Protocol: "UDP"}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -544,7 +613,7 @@ func TestSyncEndpointsProtocolSCTP(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{},
-			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(8080), Protocol: "SCTP"}},
+			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt32(8080), Protocol: "SCTP"}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -585,7 +654,7 @@ func TestSyncEndpointsItemsEmptySelectorSelectsAll(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{},
-			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
+			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -625,7 +694,7 @@ func TestSyncEndpointsItemsEmptySelectorSelectsAllNotReady(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{},
-			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
+			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -665,7 +734,7 @@ func TestSyncEndpointsItemsEmptySelectorSelectsAllMixed(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{},
-			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
+			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -709,7 +778,7 @@ func TestSyncEndpointsItemsPreexisting(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{"foo": "bar"},
-			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
+			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -752,7 +821,7 @@ func TestSyncEndpointsItemsPreexistingIdentical(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: metav1.NamespaceDefault},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{"foo": "bar"},
-			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
+			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -772,8 +841,8 @@ func TestSyncEndpointsItems(t *testing.T) {
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{"foo": "bar"},
 			Ports: []v1.ServicePort{
-				{Name: "port0", Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)},
-				{Name: "port1", Port: 88, Protocol: "TCP", TargetPort: intstr.FromInt(8088)},
+				{Name: "port0", Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)},
+				{Name: "port1", Port: 88, Protocol: "TCP", TargetPort: intstr.FromInt32(8088)},
 			},
 		},
 	})
@@ -820,8 +889,8 @@ func TestSyncEndpointsItemsWithLabels(t *testing.T) {
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{"foo": "bar"},
 			Ports: []v1.ServicePort{
-				{Name: "port0", Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)},
-				{Name: "port1", Port: 88, Protocol: "TCP", TargetPort: intstr.FromInt(8088)},
+				{Name: "port0", Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)},
+				{Name: "port1", Port: 88, Protocol: "TCP", TargetPort: intstr.FromInt32(8088)},
 			},
 		},
 	})
@@ -881,7 +950,7 @@ func TestSyncEndpointsItemsPreexistingLabelsChange(t *testing.T) {
 		},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{"foo": "bar"},
-			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
+			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -927,7 +996,7 @@ func TestWaitsForAllInformersToBeSynced2(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 				Spec: v1.ServiceSpec{
 					Selector: map[string]string{},
-					Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(8080), Protocol: "TCP"}},
+					Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt32(8080), Protocol: "TCP"}},
 				},
 			}
 			endpoints.serviceStore.Add(service)
@@ -1001,7 +1070,7 @@ func TestSyncEndpointsHeadlessService(t *testing.T) {
 		}},
 	})
 	if !reflect.DeepEqual(originalService, service) {
-		t.Fatalf("syncing endpoints changed service: %s", diff.ObjectReflectDiff(service, originalService))
+		t.Fatalf("syncing endpoints changed service: %s", cmp.Diff(service, originalService))
 	}
 	endpointsHandler.ValidateRequestCount(t, 1)
 	endpointsHandler.ValidateRequest(t, "/api/v1/namespaces/"+ns+"/endpoints/foo", "PUT", &data)
@@ -1028,7 +1097,7 @@ func TestSyncEndpointsItemsExcludeNotReadyPodsWithRestartPolicyNeverAndPhaseFail
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{"foo": "bar"},
-			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
+			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -1067,7 +1136,7 @@ func TestSyncEndpointsItemsExcludeNotReadyPodsWithRestartPolicyNeverAndPhaseSucc
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{"foo": "bar"},
-			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
+			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -1106,7 +1175,7 @@ func TestSyncEndpointsItemsExcludeNotReadyPodsWithRestartPolicyOnFailureAndPhase
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{"foo": "bar"},
-			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
+			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt32(8080)}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -1377,7 +1446,7 @@ func TestLastTriggerChangeTimeAnnotation(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns, CreationTimestamp: metav1.NewTime(triggerTime)},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{},
-			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(8080), Protocol: "TCP"}},
+			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt32(8080), Protocol: "TCP"}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -1427,7 +1496,7 @@ func TestLastTriggerChangeTimeAnnotation_AnnotationOverridden(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns, CreationTimestamp: metav1.NewTime(triggerTime)},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{},
-			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(8080), Protocol: "TCP"}},
+			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt32(8080), Protocol: "TCP"}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -1478,7 +1547,7 @@ func TestLastTriggerChangeTimeAnnotation_AnnotationCleared(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec: v1.ServiceSpec{
 			Selector: map[string]string{},
-			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(8080), Protocol: "TCP"}},
+			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt32(8080), Protocol: "TCP"}},
 		},
 	})
 	endpoints.syncService(context.TODO(), ns+"/foo")
@@ -1942,7 +2011,7 @@ func TestSyncServiceOverCapacity(t *testing.T) {
 		expectedAnnotation:  true,
 	}, {
 		name:                "annotation removed below capacity",
-		startingAnnotation:  utilpointer.StringPtr("truncated"),
+		startingAnnotation:  pointer.String("truncated"),
 		numExisting:         maxCapacity - 1,
 		numDesired:          maxCapacity - 1,
 		numDesiredNotReady:  0,
@@ -1951,7 +2020,7 @@ func TestSyncServiceOverCapacity(t *testing.T) {
 		expectedAnnotation:  false,
 	}, {
 		name:                "annotation was set to warning previously, annotation removed at capacity",
-		startingAnnotation:  utilpointer.StringPtr("warning"),
+		startingAnnotation:  pointer.String("warning"),
 		numExisting:         maxCapacity,
 		numDesired:          maxCapacity,
 		numDesiredNotReady:  0,
@@ -1960,7 +2029,7 @@ func TestSyncServiceOverCapacity(t *testing.T) {
 		expectedAnnotation:  false,
 	}, {
 		name:                "annotation was set to warning previously but still over capacity",
-		startingAnnotation:  utilpointer.StringPtr("warning"),
+		startingAnnotation:  pointer.String("warning"),
 		numExisting:         maxCapacity + 1,
 		numDesired:          maxCapacity + 1,
 		numDesiredNotReady:  0,
@@ -1969,7 +2038,7 @@ func TestSyncServiceOverCapacity(t *testing.T) {
 		expectedAnnotation:  true,
 	}, {
 		name:                "annotation removed at capacity",
-		startingAnnotation:  utilpointer.StringPtr("truncated"),
+		startingAnnotation:  pointer.String("truncated"),
 		numExisting:         maxCapacity,
 		numDesired:          maxCapacity,
 		numDesiredNotReady:  0,
@@ -1978,7 +2047,7 @@ func TestSyncServiceOverCapacity(t *testing.T) {
 		expectedAnnotation:  false,
 	}, {
 		name:                "no endpoints change, annotation value corrected",
-		startingAnnotation:  utilpointer.StringPtr("invalid"),
+		startingAnnotation:  pointer.String("invalid"),
 		numExisting:         maxCapacity + 1,
 		numDesired:          maxCapacity + 1,
 		numDesiredNotReady:  0,
@@ -2133,7 +2202,7 @@ func TestTruncateEndpoints(t *testing.T) {
 }
 
 func TestEndpointPortFromServicePort(t *testing.T) {
-	http := utilpointer.StringPtr("http")
+	http := pointer.String("http")
 	testCases := map[string]struct {
 		serviceAppProtocol           *string
 		expectedEndpointsAppProtocol *string

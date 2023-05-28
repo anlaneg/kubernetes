@@ -34,7 +34,7 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/kube-scheduler/config/v1beta3"
+	configv1 "k8s.io/kube-scheduler/config/v1"
 	"k8s.io/kubernetes/pkg/scheduler"
 	configtesting "k8s.io/kubernetes/pkg/scheduler/apis/config/testing"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
@@ -51,7 +51,6 @@ type nodeStateManager struct {
 
 func TestUnschedulableNodes(t *testing.T) {
 	testCtx := initTest(t, "unschedulable-nodes")
-	defer testutils.CleanupTest(t, testCtx)
 
 	nodeLister := testCtx.InformerFactory.Core().V1().Nodes().Lister()
 	// NOTE: This test cannot run in parallel, because it is creating and deleting
@@ -188,15 +187,9 @@ func TestMultipleSchedulers(t *testing.T) {
 	// 5. create a scheduler with name "foo-scheduler"
 	// 6. **check point-2**:
 	//     - testPodWithAnnotationFitsFoo should be scheduled
-	// 7. stop default scheduler
-	// 8. create 2 pods: testPodNoAnnotation2 and testPodWithAnnotationFitsDefault2
-	//    - note: these two pods belong to default scheduler which no longer exists
-	// 9. **check point-3**:
-	//     - testPodNoAnnotation2 and testPodWithAnnotationFitsDefault2 should NOT be scheduled
 
 	// 1. create and start default-scheduler
 	testCtx := initTest(t, "multi-scheduler")
-	defer testutils.CleanupTest(t, testCtx)
 
 	// 2. create a node
 	node := &v1.Node{
@@ -252,15 +245,15 @@ func TestMultipleSchedulers(t *testing.T) {
 	}
 
 	// 5. create and start a scheduler with name "foo-scheduler"
-	cfg := configtesting.V1beta3ToInternalWithDefaults(t, v1beta3.KubeSchedulerConfiguration{
-		Profiles: []v1beta3.KubeSchedulerProfile{{
-			SchedulerName: pointer.StringPtr(fooScheduler),
-			PluginConfig: []v1beta3.PluginConfig{
+	cfg := configtesting.V1ToInternalWithDefaults(t, configv1.KubeSchedulerConfiguration{
+		Profiles: []configv1.KubeSchedulerProfile{{
+			SchedulerName: pointer.String(fooScheduler),
+			PluginConfig: []configv1.PluginConfig{
 				{
 					Name: "VolumeBinding",
 					Args: runtime.RawExtension{
-						Object: &v1beta3.VolumeBindingArgs{
-							BindTimeoutSeconds: pointer.Int64Ptr(30),
+						Object: &configv1.VolumeBindingArgs{
+							BindTimeoutSeconds: pointer.Int64(30),
 						},
 					},
 				},
@@ -268,7 +261,7 @@ func TestMultipleSchedulers(t *testing.T) {
 		},
 	})
 	testCtx = testutils.InitTestSchedulerWithOptions(t, testCtx, 0, scheduler.WithProfiles(cfg.Profiles...))
-	testutils.SyncInformerFactory(testCtx)
+	testutils.SyncSchedulerInformerFactory(testCtx)
 	go testCtx.Scheduler.Run(testCtx.Ctx)
 
 	//	6. **check point-2**:
@@ -279,64 +272,17 @@ func TestMultipleSchedulers(t *testing.T) {
 	} else {
 		t.Logf("Test MultiScheduler: %s Pod scheduled", testPodFitsFoo.Name)
 	}
-
-	//	7. delete the pods that were scheduled by the default scheduler, and stop the default scheduler
-	if err := deletePod(testCtx.ClientSet, testPod.Name, testCtx.NS.Name); err != nil {
-		t.Errorf("Failed to delete pod: %v", err)
-	}
-	if err := deletePod(testCtx.ClientSet, testPodFitsDefault.Name, testCtx.NS.Name); err != nil {
-		t.Errorf("Failed to delete pod: %v", err)
-	}
-
-	// The rest of this test assumes that closing StopEverything will cause the
-	// scheduler thread to stop immediately.  It won't, and in fact it will often
-	// schedule 1 more pod before finally exiting.  Comment out until we fix that.
-	//
-	// See https://github.com/kubernetes/kubernetes/issues/23715 for more details.
-
-	/*
-		close(schedulerConfig.StopEverything)
-
-		//	8. create 2 pods: testPodNoAnnotation2 and testPodWithAnnotationFitsDefault2
-		//		- note: these two pods belong to default scheduler which no longer exists
-		podWithNoAnnotation2 := createPod("pod-with-no-annotation2", nil)
-		podWithAnnotationFitsDefault2 := createPod("pod-with-annotation-fits-default2", schedulerAnnotationFitsDefault)
-		testPodNoAnnotation2, err := clientSet.CoreV1().Pods(ns.Name).Create(podWithNoAnnotation2)
-		if err != nil {
-			t.Fatalf("Failed to create pod: %v", err)
-		}
-		testPodWithAnnotationFitsDefault2, err := clientSet.CoreV1().Pods(ns.Name).Create(podWithAnnotationFitsDefault2)
-		if err != nil {
-			t.Fatalf("Failed to create pod: %v", err)
-		}
-
-		//	9. **check point-3**:
-		//		- testPodNoAnnotation2 and testPodWithAnnotationFitsDefault2 should NOT be scheduled
-		err = wait.Poll(time.Second, time.Second*5, testutils.PodScheduled(clientSet, testPodNoAnnotation2.Namespace, testPodNoAnnotation2.Name))
-		if err == nil {
-			t.Errorf("Test MultiScheduler: %s Pod got scheduled, %v", testPodNoAnnotation2.Name, err)
-		} else {
-			t.Logf("Test MultiScheduler: %s Pod not scheduled", testPodNoAnnotation2.Name)
-		}
-		err = wait.Poll(time.Second, time.Second*5, testutils.PodScheduled(clientSet, testPodWithAnnotationFitsDefault2.Namespace, testPodWithAnnotationFitsDefault2.Name))
-		if err == nil {
-			t.Errorf("Test MultiScheduler: %s Pod got scheduled, %v", testPodWithAnnotationFitsDefault2.Name, err)
-		} else {
-			t.Logf("Test MultiScheduler: %s Pod scheduled", testPodWithAnnotationFitsDefault2.Name)
-		}
-	*/
 }
 
 func TestMultipleSchedulingProfiles(t *testing.T) {
-	cfg := configtesting.V1beta3ToInternalWithDefaults(t, v1beta3.KubeSchedulerConfiguration{
-		Profiles: []v1beta3.KubeSchedulerProfile{
-			{SchedulerName: pointer.StringPtr("default-scheduler")},
-			{SchedulerName: pointer.StringPtr("custom-scheduler")},
+	cfg := configtesting.V1ToInternalWithDefaults(t, configv1.KubeSchedulerConfiguration{
+		Profiles: []configv1.KubeSchedulerProfile{
+			{SchedulerName: pointer.String("default-scheduler")},
+			{SchedulerName: pointer.String("custom-scheduler")},
 		},
 	})
 
 	testCtx := initTest(t, "multi-scheduler", scheduler.WithProfiles(cfg.Profiles...))
-	defer testutils.CleanupTest(t, testCtx)
 
 	node := &v1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "node-multi-scheduler-test-node"},
@@ -400,7 +346,6 @@ func TestMultipleSchedulingProfiles(t *testing.T) {
 // This test will verify scheduler can work well regardless of whether kubelet is allocatable aware or not.
 func TestAllocatable(t *testing.T) {
 	testCtx := initTest(t, "allocatable")
-	defer testutils.CleanupTest(t, testCtx)
 
 	// 2. create a node without allocatable awareness
 	nodeRes := map[v1.ResourceName]string{
@@ -474,7 +419,6 @@ func TestAllocatable(t *testing.T) {
 func TestSchedulerInformers(t *testing.T) {
 	// Initialize scheduler.
 	testCtx := initTest(t, "scheduler-informer")
-	defer testutils.CleanupTest(t, testCtx)
 	cs := testCtx.ClientSet
 
 	defaultPodRes := &v1.ResourceRequirements{Requests: v1.ResourceList{
@@ -561,9 +505,13 @@ func TestSchedulerInformers(t *testing.T) {
 
 			// Cleanup
 			pods = append(pods, unschedulable)
-			testutils.CleanupPods(cs, t, pods)
-			cs.PolicyV1().PodDisruptionBudgets(testCtx.NS.Name).DeleteCollection(context.TODO(), metav1.DeleteOptions{}, metav1.ListOptions{})
-			cs.CoreV1().Nodes().DeleteCollection(context.TODO(), metav1.DeleteOptions{}, metav1.ListOptions{})
+			testutils.CleanupPods(testCtx.Ctx, cs, t, pods)
+			if err := cs.PolicyV1().PodDisruptionBudgets(testCtx.NS.Name).DeleteCollection(testCtx.Ctx, metav1.DeleteOptions{}, metav1.ListOptions{}); err != nil {
+				t.Errorf("error whiling deleting PDBs, error: %v", err)
+			}
+			if err := cs.CoreV1().Nodes().DeleteCollection(testCtx.Ctx, metav1.DeleteOptions{}, metav1.ListOptions{}); err != nil {
+				t.Errorf("error whiling deleting nodes, error: %v", err)
+			}
 		})
 	}
 }
@@ -577,7 +525,6 @@ func TestNodeEvents(t *testing.T) {
 	// 4. Remove the taint from node2; pod2 should now schedule on node2
 
 	testCtx := initTest(t, "node-events")
-	defer testutils.CleanupTest(t, testCtx)
 	defer testCtx.ClientSet.CoreV1().Nodes().DeleteCollection(context.TODO(), metav1.DeleteOptions{}, metav1.ListOptions{})
 
 	// 1.1 create pod1

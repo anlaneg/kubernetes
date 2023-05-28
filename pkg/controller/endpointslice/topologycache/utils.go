@@ -17,6 +17,7 @@ limitations under the License.
 package topologycache
 
 import (
+	"fmt"
 	"math"
 
 	v1 "k8s.io/api/core/v1"
@@ -65,6 +66,11 @@ func RemoveHintsFromSlices(si *SliceInfo) ([]*discovery.EndpointSlice, []*discov
 	si.Unchanged = si.Unchanged[:j]
 
 	return si.ToCreate, si.ToUpdate
+}
+
+// FormatWithAddressType foramts a given string by adding an addressType to the end of it.
+func FormatWithAddressType(s string, addressType discovery.AddressType) string {
+	return fmt.Sprintf("%s, addressType: %s", s, addressType)
 }
 
 // redistributeHints redistributes hints based in the provided EndpointSlices.
@@ -122,7 +128,7 @@ func redistributeHints(slices []*discovery.EndpointSlice, givingZones, receiving
 // give to other zones along with the number of endpoints each zone should
 // receive from other zones. This is calculated with the provided allocations
 // (desired state) and allocatedHintsByZone (current state).
-func getGivingAndReceivingZones(allocations map[string]Allocation, allocatedHintsByZone map[string]int) (map[string]int, map[string]int) {
+func getGivingAndReceivingZones(allocations map[string]allocation, allocatedHintsByZone map[string]int) (map[string]int, map[string]int) {
 	// 1. Determine the precise number of additional endpoints each zone has
 	//    (giving) or needs (receiving).
 	givingZonesDesired := map[string]float64{}
@@ -130,7 +136,7 @@ func getGivingAndReceivingZones(allocations map[string]Allocation, allocatedHint
 
 	for zone, allocation := range allocations {
 		allocatedHints, _ := allocatedHintsByZone[zone]
-		target := allocation.Desired
+		target := allocation.desired
 		if float64(allocatedHints) > target {
 			givingZonesDesired[zone] = float64(allocatedHints) - target
 		} else if float64(allocatedHints) < target {
@@ -187,7 +193,7 @@ func getMost(zones map[string]float64) (string, float64) {
 // - A hint for a zone that no longer requires any allocations.
 // - An endpoint with no hints.
 // - Hints that would make minimum allocations impossible.
-func getHintsByZone(slice *discovery.EndpointSlice, allocatedHintsByZone EndpointZoneInfo, allocations map[string]Allocation) map[string]int {
+func getHintsByZone(slice *discovery.EndpointSlice, allocatedHintsByZone EndpointZoneInfo, allocations map[string]allocation) map[string]int {
 	hintsByZone := map[string]int{}
 	for _, endpoint := range slice.Endpoints {
 		if !endpointsliceutil.EndpointReady(endpoint) {
@@ -209,7 +215,7 @@ func getHintsByZone(slice *discovery.EndpointSlice, allocatedHintsByZone Endpoin
 	for zone, numHints := range hintsByZone {
 		alreadyAllocated, _ := allocatedHintsByZone[zone]
 		allocation, ok := allocations[zone]
-		if !ok || (numHints+alreadyAllocated) > allocation.Maximum {
+		if !ok || (numHints+alreadyAllocated) > allocation.maximum {
 			return nil
 		}
 	}
@@ -237,7 +243,7 @@ func serviceOverloaded(ezi EndpointZoneInfo, zoneRatios map[string]float64) bool
 		if !ok {
 			return true
 		}
-		minEndpoints := math.Ceil(totalEndpoints * ratio * (1 / (1 + OverloadThreshold)))
+		minEndpoints := math.Ceil(totalEndpoints * ratio * (1 / (1 + overloadThreshold)))
 		if svcEndpoints < int(minEndpoints) {
 			return true
 		}
@@ -246,12 +252,11 @@ func serviceOverloaded(ezi EndpointZoneInfo, zoneRatios map[string]float64) bool
 	return false
 }
 
-// NodeReady returns true if the Node has a status condition of type "NodeReady"
-// with a status of "True".
-func NodeReady(nodeStatus v1.NodeStatus) bool {
-	for _, cond := range nodeStatus.Conditions {
-		if cond.Type == v1.NodeReady {
-			return cond.Status == v1.ConditionTrue
+// isNodeReady returns true if a node is ready; false otherwise.
+func isNodeReady(node *v1.Node) bool {
+	for _, c := range node.Status.Conditions {
+		if c.Type == v1.NodeReady {
+			return c.Status == v1.ConditionTrue
 		}
 	}
 	return false

@@ -23,11 +23,14 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 	corev1helpers "k8s.io/component-helpers/scheduling/corev1"
 	"k8s.io/klog/v2"
 	extenderv1 "k8s.io/kube-scheduler/extender/v1"
@@ -56,7 +59,7 @@ func GetPodStartTime(pod *v1.Pod) *metav1.Time {
 func GetEarliestPodStartTime(victims *extenderv1.Victims) *metav1.Time {
 	if len(victims.Pods) == 0 {
 		// should not reach here.
-		klog.ErrorS(fmt.Errorf("victims.Pods is empty. Should not reach here"), "")
+		klog.Background().Error(nil, "victims.Pods is empty. Should not reach here")
 		return nil
 	}
 
@@ -64,12 +67,12 @@ func GetEarliestPodStartTime(victims *extenderv1.Victims) *metav1.Time {
 	maxPriority := corev1helpers.PodPriority(victims.Pods[0])
 
 	for _, pod := range victims.Pods {
-		if corev1helpers.PodPriority(pod) == maxPriority {
-			if GetPodStartTime(pod).Before(earliestPodStartTime) {
-				earliestPodStartTime = GetPodStartTime(pod)
+		if podPriority := corev1helpers.PodPriority(pod); podPriority == maxPriority {
+			if podStartTime := GetPodStartTime(pod); podStartTime.Before(earliestPodStartTime) {
+				earliestPodStartTime = podStartTime
 			}
-		} else if corev1helpers.PodPriority(pod) > maxPriority {
-			maxPriority = corev1helpers.PodPriority(pod)
+		} else if podPriority > maxPriority {
+			maxPriority = podPriority
 			earliestPodStartTime = GetPodStartTime(pod)
 		}
 	}
@@ -88,6 +91,12 @@ func MoreImportantPod(pod1, pod2 *v1.Pod) bool {
 		return p1 > p2
 	}
 	return GetPodStartTime(pod1).Before(GetPodStartTime(pod2))
+}
+
+// Retriable defines the retriable errors during a scheduling cycle.
+func Retriable(err error) bool {
+	return apierrors.IsInternalError(err) || apierrors.IsServiceUnavailable(err) ||
+		net.IsConnectionRefused(err)
 }
 
 // PatchPodStatus calculates the delta bytes change from <old.Status> to <newStatus>,
@@ -115,8 +124,12 @@ func PatchPodStatus(ctx context.Context, cs kubernetes.Interface, old *v1.Pod, n
 		return nil
 	}
 
-	_, err = cs.CoreV1().Pods(old.Namespace).Patch(ctx, old.Name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{}, "status")
-	return err
+	patchFn := func() error {
+		_, err := cs.CoreV1().Pods(old.Namespace).Patch(ctx, old.Name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{}, "status")
+		return err
+	}
+
+	return retry.OnError(retry.DefaultBackoff, Retriable, patchFn)
 }
 
 // DeletePod deletes the given <pod> from API server

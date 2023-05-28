@@ -27,11 +27,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	apps "k8s.io/api/apps/v1"
 	autoscalingapi "k8s.io/api/autoscaling/v1"
 	v1 "k8s.io/api/core/v1"
 	policy "k8s.io/api/policy/v1"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/meta/testrestmapper"
@@ -48,11 +49,13 @@ import (
 	scalefake "k8s.io/client-go/scale/fake"
 	core "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 	_ "k8s.io/kubernetes/pkg/apis/core/install"
 	"k8s.io/kubernetes/pkg/controller"
-	utilpointer "k8s.io/utils/pointer"
+	clocktesting "k8s.io/utils/clock/testing"
+	"k8s.io/utils/pointer"
 )
 
 type pdbStates map[string]policy.PodDisruptionBudget
@@ -72,8 +75,8 @@ func (ps *pdbStates) Get(key string) policy.PodDisruptionBudget {
 	return (*ps)[key]
 }
 
-func (ps *pdbStates) VerifyPdbStatus(t *testing.T, key string, disruptionsAllowed, currentHealthy, desiredHealthy, expectedPods int32,
-	disruptedPodMap map[string]metav1.Time) {
+func (ps *pdbStates) VerifyPdbStatus(t *testing.T, key string, disruptionsAllowed, currentHealthy, desiredHealthy, expectedPods int32, disruptedPodMap map[string]metav1.Time) {
+	t.Helper()
 	actualPDB := ps.Get(key)
 	actualConditions := actualPDB.Status.Conditions
 	actualPDB.Status.Conditions = nil
@@ -86,9 +89,8 @@ func (ps *pdbStates) VerifyPdbStatus(t *testing.T, key string, disruptionsAllowe
 		ObservedGeneration: actualPDB.Generation,
 	}
 	actualStatus := actualPDB.Status
-	if !apiequality.Semantic.DeepEqual(actualStatus, expectedStatus) {
-		debug.PrintStack()
-		t.Fatalf("PDB %q status mismatch.  Expected %+v but got %+v.", key, expectedStatus, actualStatus)
+	if diff := cmp.Diff(expectedStatus, actualStatus, cmpopts.EquateEmpty()); diff != "" {
+		t.Fatalf("PDB %q status mismatch (-want,+got):\n%s", key, diff)
 	}
 
 	cond := apimeta.FindStatusCondition(actualConditions, policy.DisruptionAllowedCondition)
@@ -138,6 +140,7 @@ type disruptionController struct {
 	coreClient      *fake.Clientset
 	scaleClient     *scalefake.FakeScaleClient
 	discoveryClient *discoveryfake.FakeDiscovery
+	informerFactory informers.SharedInformerFactory
 }
 
 var customGVK = schema.GroupVersionKind{
@@ -147,6 +150,10 @@ var customGVK = schema.GroupVersionKind{
 }
 
 func newFakeDisruptionController() (*disruptionController, *pdbStates) {
+	return newFakeDisruptionControllerWithTime(context.TODO(), time.Now())
+}
+
+func newFakeDisruptionControllerWithTime(ctx context.Context, now time.Time) (*disruptionController, *pdbStates) {
 	ps := &pdbStates{}
 
 	coreClient := fake.NewSimpleClientset()
@@ -158,8 +165,9 @@ func newFakeDisruptionController() (*disruptionController, *pdbStates) {
 	fakeDiscovery := &discoveryfake.FakeDiscovery{
 		Fake: &core.Fake{},
 	}
+	fakeClock := clocktesting.NewFakeClock(now)
 
-	dc := NewDisruptionController(
+	dc := NewDisruptionControllerInternal(
 		informerFactory.Core().V1().Pods(),
 		informerFactory.Policy().V1().PodDisruptionBudgets(),
 		informerFactory.Core().V1().ReplicationControllers(),
@@ -170,6 +178,8 @@ func newFakeDisruptionController() (*disruptionController, *pdbStates) {
 		testrestmapper.TestOnlyStaticRESTMapper(scheme),
 		fakeScaleClient,
 		fakeDiscovery,
+		fakeClock,
+		stalePodDisruptionTimeout,
 	)
 	dc.getUpdater = func() updater { return ps.Set }
 	dc.podListerSynced = alwaysReady
@@ -178,9 +188,9 @@ func newFakeDisruptionController() (*disruptionController, *pdbStates) {
 	dc.rsListerSynced = alwaysReady
 	dc.dListerSynced = alwaysReady
 	dc.ssListerSynced = alwaysReady
-	ctx := context.TODO()
+	dc.recorder = record.NewFakeRecorder(100)
 	informerFactory.Start(ctx.Done())
-	informerFactory.WaitForCacheSync(nil)
+	informerFactory.WaitForCacheSync(ctx.Done())
 
 	return &disruptionController{
 		dc,
@@ -193,6 +203,7 @@ func newFakeDisruptionController() (*disruptionController, *pdbStates) {
 		coreClient,
 		fakeScaleClient,
 		fakeDiscovery,
+		informerFactory,
 	}, ps
 }
 
@@ -269,7 +280,6 @@ func updatePodOwnerToRs(t *testing.T, pod *v1.Pod, rs *apps.ReplicaSet) {
 	pod.OwnerReferences = append(pod.OwnerReferences, controllerReference)
 }
 
-//	pod, podName := newPod(t, name)
 func updatePodOwnerToSs(t *testing.T, pod *v1.Pod, ss *apps.StatefulSet) {
 	var controllerReference metav1.OwnerReference
 	var trueVar = true
@@ -416,7 +426,7 @@ func add(t *testing.T, store cache.Store, obj interface{}) {
 func TestNoSelector(t *testing.T) {
 	dc, ps := newFakeDisruptionController()
 
-	pdb, pdbName := newMinAvailablePodDisruptionBudget(t, intstr.FromInt(3))
+	pdb, pdbName := newMinAvailablePodDisruptionBudget(t, intstr.FromInt32(3))
 	pdb.Spec.Selector = &metav1.LabelSelector{}
 	pod, _ := newPod(t, "yo-yo-yo")
 
@@ -435,7 +445,7 @@ func TestNoSelector(t *testing.T) {
 func TestUnavailable(t *testing.T) {
 	dc, ps := newFakeDisruptionController()
 
-	pdb, pdbName := newMinAvailablePodDisruptionBudget(t, intstr.FromInt(3))
+	pdb, pdbName := newMinAvailablePodDisruptionBudget(t, intstr.FromInt32(3))
 	ctx := context.TODO()
 	add(t, dc.pdbStore, pdb)
 	dc.sync(ctx, pdbName)
@@ -465,7 +475,7 @@ func TestUnavailable(t *testing.T) {
 func TestIntegerMaxUnavailable(t *testing.T) {
 	dc, ps := newFakeDisruptionController()
 
-	pdb, pdbName := newMaxUnavailablePodDisruptionBudget(t, intstr.FromInt(1))
+	pdb, pdbName := newMaxUnavailablePodDisruptionBudget(t, intstr.FromInt32(1))
 	add(t, dc.pdbStore, pdb)
 	ctx := context.TODO()
 	dc.sync(ctx, pdbName)
@@ -477,6 +487,8 @@ func TestIntegerMaxUnavailable(t *testing.T) {
 	dc.sync(ctx, pdbName)
 
 	ps.VerifyDisruptionAllowed(t, pdbName, 0)
+	verifyEventEmitted(t, dc, "UnmanagedPods")
+
 }
 
 // Verify that an integer MaxUnavailable will recompute allowed disruptions when the scale of
@@ -484,7 +496,7 @@ func TestIntegerMaxUnavailable(t *testing.T) {
 func TestIntegerMaxUnavailableWithScaling(t *testing.T) {
 	dc, ps := newFakeDisruptionController()
 
-	pdb, pdbName := newMaxUnavailablePodDisruptionBudget(t, intstr.FromInt(2))
+	pdb, pdbName := newMaxUnavailablePodDisruptionBudget(t, intstr.FromInt32(2))
 	add(t, dc.pdbStore, pdb)
 
 	rs, _ := newReplicaSet(t, 7)
@@ -498,7 +510,7 @@ func TestIntegerMaxUnavailableWithScaling(t *testing.T) {
 	ps.VerifyPdbStatus(t, pdbName, 0, 1, 5, 7, map[string]metav1.Time{})
 
 	// Update scale of ReplicaSet and check PDB
-	rs.Spec.Replicas = utilpointer.Int32Ptr(5)
+	rs.Spec.Replicas = pointer.Int32(5)
 	update(t, dc.rsStore, rs)
 
 	dc.sync(ctx, pdbName)
@@ -524,7 +536,7 @@ func TestPercentageMaxUnavailableWithScaling(t *testing.T) {
 	ps.VerifyPdbStatus(t, pdbName, 0, 1, 4, 7, map[string]metav1.Time{})
 
 	// Update scale of ReplicaSet and check PDB
-	rs.Spec.Replicas = utilpointer.Int32Ptr(3)
+	rs.Spec.Replicas = pointer.Int32(3)
 	update(t, dc.rsStore, rs)
 
 	dc.sync(ctx, pdbName)
@@ -548,6 +560,36 @@ func TestNakedPod(t *testing.T) {
 	dc.sync(ctx, pdbName)
 
 	ps.VerifyDisruptionAllowed(t, pdbName, 0)
+	verifyEventEmitted(t, dc, "UnmanagedPods")
+}
+
+// Create a pod  with unsupported controller, and verify that a PDB with a percentage
+// specified won't allow a disruption.
+func TestUnsupportedControllerPod(t *testing.T) {
+	dc, ps := newFakeDisruptionController()
+
+	pdb, pdbName := newMinAvailablePodDisruptionBudget(t, intstr.FromString("28%"))
+	add(t, dc.pdbStore, pdb)
+	ctx := context.TODO()
+	dc.sync(ctx, pdbName)
+	// This verifies that when a PDB has 0 pods, disruptions are not allowed.
+	ps.VerifyDisruptionAllowed(t, pdbName, 0)
+
+	pod, _ := newPod(t, "naked")
+	isController := true
+	pod.OwnerReferences = append(pod.OwnerReferences, metav1.OwnerReference{
+		APIVersion: "apps.test.io/v1",
+		Kind:       "TestWorkload",
+		Name:       "fake-controller",
+		UID:        "b7329742-8daa-493a-8881-6ca07139172b",
+		Controller: &isController,
+	})
+
+	add(t, dc.podStore, pod)
+	dc.sync(ctx, pdbName)
+
+	ps.VerifyDisruptionAllowed(t, pdbName, 0)
+	verifyEventEmitted(t, dc, "CalculateExpectedPodCountFailed")
 }
 
 // Verify that disruption controller is not erroring when unmanaged pods are found
@@ -564,9 +606,8 @@ func TestStatusForUnmanagedPod(t *testing.T) {
 	pod, _ := newPod(t, "unmanaged")
 	add(t, dc.podStore, pod)
 	dc.sync(ctx, pdbName)
-
 	ps.VerifyNoStatusError(t, pdbName)
-
+	verifyEventEmitted(t, dc, "UnmanagedPods")
 }
 
 // Check if the unmanaged pods are correctly collected or not
@@ -590,7 +631,7 @@ func TestTotalUnmanagedPods(t *testing.T) {
 		t.Fatalf("expected one pod to be unmanaged pod but found %d", len(unmanagedPods))
 	}
 	ps.VerifyNoStatusError(t, pdbName)
-
+	verifyEventEmitted(t, dc, "UnmanagedPods")
 }
 
 // Verify that we count the scale of a ReplicaSet even when it has no Deployment.
@@ -631,7 +672,7 @@ func TestScaleResource(t *testing.T) {
 		return true, obj, nil
 	})
 
-	pdb, pdbName := newMaxUnavailablePodDisruptionBudget(t, intstr.FromInt(int(maxUnavailable)))
+	pdb, pdbName := newMaxUnavailablePodDisruptionBudget(t, intstr.FromInt32(maxUnavailable))
 	add(t, dc.pdbStore, pdb)
 
 	trueVal := true
@@ -666,6 +707,25 @@ func TestScaleFinderNoResource(t *testing.T) {
 			apiResources: []metav1.APIResource{
 				{
 					Kind: customGVK.Kind,
+					Name: resourceName + "/status",
+				},
+				{
+					Kind:    "Scale",
+					Group:   autoscalingapi.GroupName,
+					Version: "v1",
+					Name:    resourceName + "/scale",
+				},
+				{
+					Kind: customGVK.Kind,
+					Name: resourceName,
+				},
+			},
+			expectError: false,
+		},
+		"resource implements unsupported data format for scale subresource": {
+			apiResources: []metav1.APIResource{
+				{
+					Kind: customGVK.Kind,
 					Name: resourceName,
 				},
 				{
@@ -673,7 +733,7 @@ func TestScaleFinderNoResource(t *testing.T) {
 					Name: resourceName + "/scale",
 				},
 			},
-			expectError: false,
+			expectError: true,
 		},
 		"resource does not implement scale": {
 			apiResources: []metav1.APIResource{
@@ -970,18 +1030,18 @@ func TestPDBNotExist(t *testing.T) {
 func TestUpdateDisruptedPods(t *testing.T) {
 	dc, ps := newFakeDisruptionController()
 	dc.recheckQueue = workqueue.NewNamedDelayingQueue("pdb_queue")
-	pdb, pdbName := newMinAvailablePodDisruptionBudget(t, intstr.FromInt(1))
-	currentTime := time.Now()
+	pdb, pdbName := newMinAvailablePodDisruptionBudget(t, intstr.FromInt32(1))
+	currentTime := dc.clock.Now()
 	pdb.Status.DisruptedPods = map[string]metav1.Time{
 		"p1":       {Time: currentTime},                       // Should be removed, pod deletion started.
-		"p2":       {Time: currentTime.Add(-5 * time.Minute)}, // Should be removed, expired.
-		"p3":       {Time: currentTime},                       // Should remain, pod untouched.
+		"p2":       {Time: currentTime.Add(-3 * time.Minute)}, // Should be removed, expired.
+		"p3":       {Time: currentTime.Add(-time.Minute)},     // Should remain, pod untouched.
 		"notthere": {Time: currentTime},                       // Should be removed, pod deleted.
 	}
 	add(t, dc.pdbStore, pdb)
 
 	pod1, _ := newPod(t, "p1")
-	pod1.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	pod1.DeletionTimestamp = &metav1.Time{Time: dc.clock.Now()}
 	pod2, _ := newPod(t, "p2")
 	pod3, _ := newPod(t, "p3")
 
@@ -991,7 +1051,7 @@ func TestUpdateDisruptedPods(t *testing.T) {
 
 	dc.sync(context.TODO(), pdbName)
 
-	ps.VerifyPdbStatus(t, pdbName, 0, 1, 1, 3, map[string]metav1.Time{"p3": {Time: currentTime}})
+	ps.VerifyPdbStatus(t, pdbName, 0, 1, 1, 3, map[string]metav1.Time{"p3": {Time: currentTime.Add(-time.Minute)}})
 }
 
 func TestBasicFinderFunctions(t *testing.T) {
@@ -1212,7 +1272,7 @@ func TestUpdatePDBStatusRetries(t *testing.T) {
 	dc.getUpdater = func() updater { return dc.writePdbStatus }
 	ctx := context.TODO()
 	// Create a PDB and 3 pods that match it.
-	pdb, pdbKey := newMinAvailablePodDisruptionBudget(t, intstr.FromInt(1))
+	pdb, pdbKey := newMinAvailablePodDisruptionBudget(t, intstr.FromInt32(1))
 	pdb, err := dc.coreClient.PolicyV1().PodDisruptionBudgets(pdb.Namespace).Create(ctx, pdb, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to create PDB: %v", err)
@@ -1265,7 +1325,7 @@ func TestUpdatePDBStatusRetries(t *testing.T) {
 		updatedPDB.Status.DisruptionsAllowed -= int32(len(podNames))
 		updatedPDB.Status.DisruptedPods = make(map[string]metav1.Time)
 		for _, name := range podNames {
-			updatedPDB.Status.DisruptedPods[name] = metav1.NewTime(time.Now())
+			updatedPDB.Status.DisruptedPods[name] = metav1.NewTime(dc.clock.Now())
 		}
 		if err := dc.coreClient.Tracker().Update(poddisruptionbudgetsResource, updatedPDB, updatedPDB.Namespace); err != nil {
 			t.Fatalf("Eviction (PDB update) failed: %v", err)
@@ -1349,12 +1409,155 @@ func TestInvalidSelectors(t *testing.T) {
 		t.Run(tn, func(t *testing.T) {
 			dc, ps := newFakeDisruptionController()
 
-			pdb, pdbName := newMinAvailablePodDisruptionBudget(t, intstr.FromInt(3))
+			pdb, pdbName := newMinAvailablePodDisruptionBudget(t, intstr.FromInt32(3))
 			pdb.Spec.Selector = tc.labelSelector
 
 			add(t, dc.pdbStore, pdb)
 			dc.sync(ctx, pdbName)
 			ps.VerifyPdbStatus(t, pdbName, 0, 0, 0, 0, map[string]metav1.Time{})
+		})
+	}
+}
+
+func TestStalePodDisruption(t *testing.T) {
+	now := time.Now()
+	cases := map[string]struct {
+		pod            *v1.Pod
+		timePassed     time.Duration
+		wantConditions []v1.PodCondition
+	}{
+		"stale pod disruption": {
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "foo",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Status: v1.PodStatus{
+					Conditions: []v1.PodCondition{
+						{
+							Type:               v1.DisruptionTarget,
+							Status:             v1.ConditionTrue,
+							LastTransitionTime: metav1.Time{Time: now},
+						},
+					},
+				},
+			},
+			timePassed: 2*time.Minute + time.Second,
+			wantConditions: []v1.PodCondition{
+				{
+					Type:   v1.DisruptionTarget,
+					Status: v1.ConditionFalse,
+				},
+			},
+		},
+		"pod disruption in progress": {
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "foo",
+					Namespace: metav1.NamespaceDefault,
+				},
+				Status: v1.PodStatus{
+					Conditions: []v1.PodCondition{
+						{
+							Type:               v1.DisruptionTarget,
+							Status:             v1.ConditionTrue,
+							LastTransitionTime: metav1.Time{Time: now},
+						},
+					},
+				},
+			},
+			timePassed: 2*time.Minute - time.Second,
+			wantConditions: []v1.PodCondition{
+				{
+					Type:   v1.DisruptionTarget,
+					Status: v1.ConditionTrue,
+				},
+			},
+		},
+		"pod disruption actuated": {
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "foo",
+					Namespace:         metav1.NamespaceDefault,
+					DeletionTimestamp: &metav1.Time{Time: now},
+				},
+				Status: v1.PodStatus{
+					Conditions: []v1.PodCondition{
+						{
+							Type:               v1.DisruptionTarget,
+							Status:             v1.ConditionTrue,
+							LastTransitionTime: metav1.Time{Time: now},
+						},
+					},
+				},
+			},
+			timePassed: 2*time.Minute + time.Second,
+			wantConditions: []v1.PodCondition{
+				{
+					Type:   v1.DisruptionTarget,
+					Status: v1.ConditionTrue,
+				},
+			},
+		},
+		"no pod disruption": {
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "foo",
+					Namespace:         metav1.NamespaceDefault,
+					DeletionTimestamp: &metav1.Time{Time: now},
+				},
+			},
+			timePassed: 2*time.Minute + time.Second,
+		},
+		"pod disruption cleared": {
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "foo",
+					Namespace:         metav1.NamespaceDefault,
+					DeletionTimestamp: &metav1.Time{Time: now},
+				},
+				Status: v1.PodStatus{
+					Conditions: []v1.PodCondition{
+						{
+							Type:   v1.DisruptionTarget,
+							Status: v1.ConditionFalse,
+						},
+					},
+				},
+			},
+			timePassed: 2*time.Minute + time.Second,
+			wantConditions: []v1.PodCondition{
+				{
+					Type:   v1.DisruptionTarget,
+					Status: v1.ConditionFalse,
+				},
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			dc, _ := newFakeDisruptionControllerWithTime(ctx, now)
+			go dc.Run(ctx)
+			if _, err := dc.coreClient.CoreV1().Pods(tc.pod.Namespace).Create(ctx, tc.pod, metav1.CreateOptions{}); err != nil {
+				t.Fatalf("Failed to create pod: %v", err)
+			}
+			dc.clock.Sleep(tc.timePassed)
+			if err := dc.informerFactory.Core().V1().Pods().Informer().GetIndexer().Add(tc.pod); err != nil {
+				t.Fatalf("Failed adding pod to indexer: %v", err)
+			}
+			diff := ""
+			if err := wait.Poll(100*time.Millisecond, wait.ForeverTestTimeout, func() (bool, error) {
+				pod, err := dc.kubeClient.CoreV1().Pods(tc.pod.Namespace).Get(ctx, tc.pod.Name, metav1.GetOptions{})
+				if err != nil {
+					t.Fatalf("Failed getting updated pod: %v", err)
+				}
+				diff = cmp.Diff(tc.wantConditions, pod.Status.Conditions, cmpopts.IgnoreFields(v1.PodCondition{}, "LastTransitionTime"))
+				return diff == "", nil
+			}); err != nil {
+				t.Fatalf("Failed waiting for worker to sync: %v, (-want,+got):\n%s", err, diff)
+			}
 		})
 	}
 }
@@ -1366,6 +1569,20 @@ func waitForCacheCount(store cache.Store, n int) error {
 	return wait.Poll(10*time.Millisecond, 10*time.Second, func() (bool, error) {
 		return len(store.List()) == n, nil
 	})
+}
+
+func verifyEventEmitted(t *testing.T, dc *disruptionController, expectedEvent string) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	for {
+		select {
+		case e := <-dc.recorder.(*record.FakeRecorder).Events:
+			if strings.Contains(e, expectedEvent) {
+				return
+			}
+		case <-ticker.C:
+			t.Fatalf("Timed out: expected event not generated: %v", expectedEvent)
+		}
+	}
 }
 
 // TestMain adds klog flags to make debugging tests easier.

@@ -212,6 +212,10 @@ func TestAssumePodScheduled(t *testing.T) {
 				if err := cache.AssumePod(pod); err != nil {
 					t.Fatalf("AssumePod failed: %v", err)
 				}
+				// pod already in cache so can't be assumed
+				if err := cache.AssumePod(pod); err == nil {
+					t.Error("expected error, no error found")
+				}
 			}
 			n := cache.nodes[nodeName]
 			if err := deepEqualWithoutGeneration(n, tt.wNodeInfo); err != nil {
@@ -253,46 +257,75 @@ func TestExpirePod(t *testing.T) {
 		makeBasePod(t, nodeName, "test-3", "200m", "1Ki", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}),
 	}
 	now := time.Now()
-	ttl := 10 * time.Second
+	defaultTTL := 10 * time.Second
 	tests := []struct {
+		name        string
 		pods        []*testExpirePodStruct
 		cleanupTime time.Time
-
-		wNodeInfo *framework.NodeInfo
-	}{{ // assumed pod would expires
-		pods: []*testExpirePodStruct{
-			{pod: testPods[0], finishBind: true, assumedTime: now},
-		},
-		cleanupTime: now.Add(2 * ttl),
-		wNodeInfo:   nil,
-	}, { // first one would expire, second and third would not.
-		pods: []*testExpirePodStruct{
-			{pod: testPods[0], finishBind: true, assumedTime: now},
-			{pod: testPods[1], finishBind: true, assumedTime: now.Add(3 * ttl / 2)},
-			{pod: testPods[2]},
-		},
-		cleanupTime: now.Add(2 * ttl),
-		wNodeInfo: newNodeInfo(
-			&framework.Resource{
-				MilliCPU: 400,
-				Memory:   2048,
+		ttl         time.Duration
+		wNodeInfo   *framework.NodeInfo
+	}{
+		{
+			name: "assumed pod would expire",
+			pods: []*testExpirePodStruct{
+				{pod: testPods[0], finishBind: true, assumedTime: now},
 			},
-			&framework.Resource{
-				MilliCPU: 400,
-				Memory:   2048,
+			cleanupTime: now.Add(2 * defaultTTL),
+			wNodeInfo:   nil,
+			ttl:         defaultTTL,
+		},
+		{
+			name: "first one would expire, second and third would not",
+			pods: []*testExpirePodStruct{
+				{pod: testPods[0], finishBind: true, assumedTime: now},
+				{pod: testPods[1], finishBind: true, assumedTime: now.Add(3 * defaultTTL / 2)},
+				{pod: testPods[2]},
 			},
-			// Order gets altered when removing pods.
-			[]*v1.Pod{testPods[2], testPods[1]},
-			newHostPortInfoBuilder().add("TCP", "127.0.0.1", 8080).build(),
-			make(map[string]*framework.ImageStateSummary),
-		),
-	}}
+			cleanupTime: now.Add(2 * defaultTTL),
+			wNodeInfo: newNodeInfo(
+				&framework.Resource{
+					MilliCPU: 400,
+					Memory:   2048,
+				},
+				&framework.Resource{
+					MilliCPU: 400,
+					Memory:   2048,
+				},
+				// Order gets altered when removing pods.
+				[]*v1.Pod{testPods[2], testPods[1]},
+				newHostPortInfoBuilder().add("TCP", "127.0.0.1", 8080).build(),
+				make(map[string]*framework.ImageStateSummary),
+			),
+			ttl: defaultTTL,
+		},
+		{
+			name: "assumed pod would never expire",
+			pods: []*testExpirePodStruct{
+				{pod: testPods[0], finishBind: true, assumedTime: now},
+			},
+			cleanupTime: now.Add(3 * defaultTTL),
+			wNodeInfo: newNodeInfo(
+				&framework.Resource{
+					MilliCPU: 100,
+					Memory:   500,
+				},
+				&framework.Resource{
+					MilliCPU: 100,
+					Memory:   500,
+				},
+				[]*v1.Pod{testPods[0]},
+				newHostPortInfoBuilder().add("TCP", "127.0.0.1", 80).build(),
+				make(map[string]*framework.ImageStateSummary),
+			),
+			ttl: time.Duration(0),
+		},
+	}
 
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			cache := newCache(ttl, time.Second, nil)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := newCache(tc.ttl, time.Second, nil)
 
-			for _, pod := range tt.pods {
+			for _, pod := range tc.pods {
 				if err := cache.AssumePod(pod.pod); err != nil {
 					t.Fatal(err)
 				}
@@ -305,9 +338,9 @@ func TestExpirePod(t *testing.T) {
 			}
 			// pods that got bound and have assumedTime + ttl < cleanupTime will get
 			// expired and removed
-			cache.cleanupAssumedPods(tt.cleanupTime)
+			cache.cleanupAssumedPods(tc.cleanupTime)
 			n := cache.nodes[nodeName]
-			if err := deepEqualWithoutGeneration(n, tt.wNodeInfo); err != nil {
+			if err := deepEqualWithoutGeneration(n, tc.wNodeInfo); err != nil {
 				t.Error(err)
 			}
 		})
@@ -359,6 +392,10 @@ func TestAddPodWillConfirm(t *testing.T) {
 			for _, podToAdd := range tt.podsToAdd {
 				if err := cache.AddPod(podToAdd); err != nil {
 					t.Fatalf("AddPod failed: %v", err)
+				}
+				// pod already in added state
+				if err := cache.AddPod(podToAdd); err == nil {
+					t.Error("expected error, no error found")
 				}
 			}
 			cache.cleanupAssumedPods(now.Add(2 * ttl))
@@ -414,6 +451,68 @@ func TestDump(t *testing.T) {
 			}
 			if !reflect.DeepEqual(snapshot.AssumedPods, cache.assumedPods) {
 				t.Errorf("expect \n%+v; got \n%+v", cache.assumedPods, snapshot.AssumedPods)
+			}
+		})
+	}
+}
+
+// TestAddPodAlwaysUpdatePodInfoInNodeInfo tests that AddPod method always updates PodInfo in NodeInfo,
+// even when the Pod is assumed one.
+func TestAddPodAlwaysUpdatesPodInfoInNodeInfo(t *testing.T) {
+	ttl := 10 * time.Second
+	now := time.Now()
+	p1 := makeBasePod(t, "node1", "test-1", "100m", "500", "", []v1.ContainerPort{{HostPort: 80}})
+
+	p2 := p1.DeepCopy()
+	p2.Status.Conditions = append(p1.Status.Conditions, v1.PodCondition{
+		Type:   v1.PodScheduled,
+		Status: v1.ConditionTrue,
+	})
+
+	tests := []struct {
+		podsToAssume         []*v1.Pod
+		podsToAddAfterAssume []*v1.Pod
+		nodeInfo             map[string]*framework.NodeInfo
+	}{
+		{
+			podsToAssume:         []*v1.Pod{p1},
+			podsToAddAfterAssume: []*v1.Pod{p2},
+			nodeInfo: map[string]*framework.NodeInfo{
+				"node1": newNodeInfo(
+					&framework.Resource{
+						MilliCPU: 100,
+						Memory:   500,
+					},
+					&framework.Resource{
+						MilliCPU: 100,
+						Memory:   500,
+					},
+					[]*v1.Pod{p2},
+					newHostPortInfoBuilder().add("TCP", "0.0.0.0", 80).build(),
+					make(map[string]*framework.ImageStateSummary),
+				),
+			},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+			cache := newCache(ttl, time.Second, nil)
+			for _, podToAssume := range tt.podsToAssume {
+				if err := assumeAndFinishBinding(cache, podToAssume, now); err != nil {
+					t.Fatalf("assumePod failed: %v", err)
+				}
+			}
+			for _, podToAdd := range tt.podsToAddAfterAssume {
+				if err := cache.AddPod(podToAdd); err != nil {
+					t.Fatalf("AddPod failed: %v", err)
+				}
+			}
+			for nodeName, expected := range tt.nodeInfo {
+				n := cache.nodes[nodeName]
+				if err := deepEqualWithoutGeneration(n, expected); err != nil {
+					t.Errorf("node %q: %v", nodeName, err)
+				}
 			}
 		})
 	}
@@ -642,6 +741,17 @@ func TestUpdatePodAndGet(t *testing.T) {
 	for i, tt := range tests {
 		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
 			cache := newCache(ttl, time.Second, nil)
+			// trying to get an unknown pod should return an error
+			// podToUpdate has not been added yet
+			if _, err := cache.GetPod(tt.podToUpdate); err == nil {
+				t.Error("expected error, no error found")
+			}
+
+			// trying to update an unknown pod should return an error
+			// pod has not been added yet
+			if err := cache.UpdatePod(tt.pod, tt.podToUpdate); err == nil {
+				t.Error("expected error, no error found")
+			}
 
 			if err := tt.handler(cache, tt.pod); err != nil {
 				t.Fatalf("unexpected err: %v", err)
@@ -856,6 +966,11 @@ func TestRemovePod(t *testing.T) {
 				t.Errorf("pod was not deleted")
 			}
 
+			// trying to remove a pod already removed should return an error
+			if err := cache.RemovePod(pod); err == nil {
+				t.Error("expected error, no error found")
+			}
+
 			// Node that owned the Pod should be at the head of the list.
 			if cache.headNode.info.Node().Name != nodeName {
 				t.Errorf("node %q is not at the head of the list", nodeName)
@@ -900,6 +1015,10 @@ func TestForgetPod(t *testing.T) {
 		}
 		if err := isForgottenFromCache(pod, cache); err != nil {
 			t.Errorf("pod %q: %v", pod.Name, err)
+		}
+		// trying to forget a pod already forgotten should return an error
+		if err := cache.ForgetPod(pod); err == nil {
+			t.Error("expected error, no error found")
 		}
 	}
 }
@@ -1129,6 +1248,12 @@ func TestNodeOperators(t *testing.T) {
 			} else if n != nil {
 				t.Errorf("The node object for %v should be nil", node.Name)
 			}
+
+			// trying to remove a node already removed should return an error
+			if err := cache.RemoveNode(node); err == nil {
+				t.Error("expected error, no error found")
+			}
+
 			// Check node is removed from nodeTree as well.
 			nodesList, err = cache.nodeTree.list()
 			if err != nil {
@@ -1302,19 +1427,19 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 		operations                   []operation
 		expected                     []*v1.Node
 		expectedHavePodsWithAffinity int
-		expectedUsedPVCSet           sets.String
+		expectedUsedPVCSet           sets.Set[string]
 	}{
 		{
 			name:               "Empty cache",
 			operations:         []operation{},
 			expected:           []*v1.Node{},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name:               "Single node",
 			operations:         []operation{addNode(1)},
 			expected:           []*v1.Node{nodes[1]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Add node, remove it, add it again",
@@ -1322,7 +1447,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(1), updateSnapshot(), removeNode(1), addNode(1),
 			},
 			expected:           []*v1.Node{nodes[1]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Add node and remove it in the same cycle, add it again",
@@ -1330,7 +1455,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(1), updateSnapshot(), addNode(2), removeNode(1),
 			},
 			expected:           []*v1.Node{nodes[2]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Add a few nodes, and snapshot in the middle",
@@ -1339,7 +1464,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				updateSnapshot(), addNode(3),
 			},
 			expected:           []*v1.Node{nodes[3], nodes[2], nodes[1], nodes[0]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Add a few nodes, and snapshot in the end",
@@ -1347,7 +1472,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(0), addNode(2), addNode(5), addNode(6),
 			},
 			expected:           []*v1.Node{nodes[6], nodes[5], nodes[2], nodes[0]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Update some nodes",
@@ -1355,7 +1480,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(0), addNode(1), addNode(5), updateSnapshot(), updateNode(1),
 			},
 			expected:           []*v1.Node{nodes[1], nodes[5], nodes[0]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Add a few nodes, and remove all of them",
@@ -1364,7 +1489,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				removeNode(0), removeNode(2), removeNode(5), removeNode(6),
 			},
 			expected:           []*v1.Node{},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Add a few nodes, and remove some of them",
@@ -1373,7 +1498,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				removeNode(0), removeNode(6),
 			},
 			expected:           []*v1.Node{nodes[5], nodes[2]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Add a few nodes, remove all of them, and add more",
@@ -1383,7 +1508,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(7), addNode(9),
 			},
 			expected:           []*v1.Node{nodes[9], nodes[7]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Update nodes in particular order",
@@ -1392,7 +1517,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(1),
 			},
 			expected:           []*v1.Node{nodes[1], nodes[8], nodes[2]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Add some nodes and some pods",
@@ -1401,7 +1526,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addPod(8), addPod(2),
 			},
 			expected:           []*v1.Node{nodes[2], nodes[8], nodes[0]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Updating a pod moves its node to the head",
@@ -1409,7 +1534,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(0), addPod(0), addNode(2), addNode(4), updatePod(0),
 			},
 			expected:           []*v1.Node{nodes[0], nodes[4], nodes[2]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Add pod before its node",
@@ -1417,7 +1542,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(0), addPod(1), updatePod(1), addNode(1),
 			},
 			expected:           []*v1.Node{nodes[1], nodes[0]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Remove node before its pods",
@@ -1427,7 +1552,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				updatePod(1), updatePod(11), removePod(1), removePod(11),
 			},
 			expected:           []*v1.Node{nodes[0]},
-			expectedUsedPVCSet: sets.NewString(),
+			expectedUsedPVCSet: sets.New[string](),
 		},
 		{
 			name: "Add Pods with affinity",
@@ -1436,7 +1561,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 			},
 			expected:                     []*v1.Node{nodes[1], nodes[0]},
 			expectedHavePodsWithAffinity: 1,
-			expectedUsedPVCSet:           sets.NewString(),
+			expectedUsedPVCSet:           sets.New[string](),
 		},
 		{
 			name: "Add Pods with PVC",
@@ -1444,7 +1569,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(0), addPodWithPVC(0), updateSnapshot(), addNode(1),
 			},
 			expected:           []*v1.Node{nodes[1], nodes[0]},
-			expectedUsedPVCSet: sets.NewString("test-ns/test-pvc0"),
+			expectedUsedPVCSet: sets.New("test-ns/test-pvc0"),
 		},
 		{
 			name: "Add multiple nodes with pods with affinity",
@@ -1453,7 +1578,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 			},
 			expected:                     []*v1.Node{nodes[1], nodes[0]},
 			expectedHavePodsWithAffinity: 2,
-			expectedUsedPVCSet:           sets.NewString(),
+			expectedUsedPVCSet:           sets.New[string](),
 		},
 		{
 			name: "Add multiple nodes with pods with PVC",
@@ -1461,7 +1586,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(0), addPodWithPVC(0), updateSnapshot(), addNode(1), addPodWithPVC(1), updateSnapshot(),
 			},
 			expected:           []*v1.Node{nodes[1], nodes[0]},
-			expectedUsedPVCSet: sets.NewString("test-ns/test-pvc0", "test-ns/test-pvc1"),
+			expectedUsedPVCSet: sets.New("test-ns/test-pvc0", "test-ns/test-pvc1"),
 		},
 		{
 			name: "Add then Remove pods with affinity",
@@ -1470,7 +1595,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 			},
 			expected:                     []*v1.Node{nodes[0], nodes[1]},
 			expectedHavePodsWithAffinity: 0,
-			expectedUsedPVCSet:           sets.NewString(),
+			expectedUsedPVCSet:           sets.New[string](),
 		},
 		{
 			name: "Add then Remove pod with PVC",
@@ -1478,7 +1603,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(0), addPodWithPVC(0), updateSnapshot(), removePodWithPVC(0), addPodWithPVC(2), updateSnapshot(),
 			},
 			expected:           []*v1.Node{nodes[0]},
-			expectedUsedPVCSet: sets.NewString("test-ns/test-pvc2"),
+			expectedUsedPVCSet: sets.New("test-ns/test-pvc2"),
 		},
 		{
 			name: "Add then Remove pod with PVC and add same pod again",
@@ -1486,7 +1611,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				addNode(0), addPodWithPVC(0), updateSnapshot(), removePodWithPVC(0), addPodWithPVC(0), updateSnapshot(),
 			},
 			expected:           []*v1.Node{nodes[0]},
-			expectedUsedPVCSet: sets.NewString("test-ns/test-pvc0"),
+			expectedUsedPVCSet: sets.New("test-ns/test-pvc0"),
 		},
 		{
 			name: "Add and Remove multiple pods with PVC with same ref count length different content",
@@ -1495,7 +1620,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				removePodWithPVC(0), removePodWithPVC(1), addPodWithPVC(2), addPodWithPVC(3), updateSnapshot(),
 			},
 			expected:           []*v1.Node{nodes[1], nodes[0]},
-			expectedUsedPVCSet: sets.NewString("test-ns/test-pvc2", "test-ns/test-pvc3"),
+			expectedUsedPVCSet: sets.New("test-ns/test-pvc2", "test-ns/test-pvc3"),
 		},
 		{
 			name: "Add and Remove multiple pods with PVC",
@@ -1506,7 +1631,7 @@ func TestSchedulerCache_UpdateSnapshot(t *testing.T) {
 				removePodWithPVC(0), removePodWithPVC(3), removePodWithPVC(4), updateSnapshot(),
 			},
 			expected:           []*v1.Node{nodes[0], nodes[1]},
-			expectedUsedPVCSet: sets.NewString("test-ns/test-pvc1", "test-ns/test-pvc2"),
+			expectedUsedPVCSet: sets.New("test-ns/test-pvc1", "test-ns/test-pvc2"),
 		},
 	}
 
@@ -1578,7 +1703,7 @@ func compareCacheWithNodeInfoSnapshot(t *testing.T, cache *cacheImpl, snapshot *
 
 	expectedNodeInfoList := make([]*framework.NodeInfo, 0, cache.nodeTree.numNodes)
 	expectedHavePodsWithAffinityNodeInfoList := make([]*framework.NodeInfo, 0, cache.nodeTree.numNodes)
-	expectedUsedPVCSet := sets.NewString()
+	expectedUsedPVCSet := sets.New[string]()
 	nodesList, err := cache.nodeTree.list()
 	if err != nil {
 		t.Fatal(err)

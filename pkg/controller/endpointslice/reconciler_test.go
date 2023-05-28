@@ -32,19 +32,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	k8stesting "k8s.io/client-go/testing"
-	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/component-base/metrics/testutil"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/controller/endpointslice/metrics"
 	"k8s.io/kubernetes/pkg/controller/endpointslice/topologycache"
 	endpointsliceutil "k8s.io/kubernetes/pkg/controller/util/endpointslice"
-	"k8s.io/kubernetes/pkg/features"
-	utilpointer "k8s.io/utils/pointer"
+	"k8s.io/utils/pointer"
 )
 
 var defaultMaxEndpointsPerSlice = int32(100)
@@ -119,17 +117,20 @@ func TestReconcile1Pod(t *testing.T) {
 		expectedEndpoint         discovery.Endpoint
 		expectedLabels           map[string]string
 		expectedEndpointPerSlice map[discovery.AddressType][]discovery.Endpoint
-		terminatingGateEnabled   bool
 	}{
 		"no-family-service": {
 			service: noFamilyService,
 			expectedEndpointPerSlice: map[discovery.AddressType][]discovery.Endpoint{
 				discovery.AddressTypeIPv4: {
 					{
-						Addresses:  []string{"1.2.3.4"},
-						Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-						Zone:       utilpointer.StringPtr("us-central1-a"),
-						NodeName:   utilpointer.StringPtr("node-1"),
+						Addresses: []string{"1.2.3.4"},
+						Conditions: discovery.EndpointConditions{
+							Ready:       pointer.Bool(true),
+							Serving:     pointer.Bool(true),
+							Terminating: pointer.Bool(false),
+						},
+						Zone:     pointer.String("us-central1-a"),
+						NodeName: pointer.String("node-1"),
 						TargetRef: &corev1.ObjectReference{
 							Kind:      "Pod",
 							Namespace: namespace,
@@ -148,37 +149,14 @@ func TestReconcile1Pod(t *testing.T) {
 			expectedEndpointPerSlice: map[discovery.AddressType][]discovery.Endpoint{
 				discovery.AddressTypeIPv4: {
 					{
-						Addresses:  []string{"1.2.3.4"},
-						Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-						Zone:       utilpointer.StringPtr("us-central1-a"),
-						NodeName:   utilpointer.StringPtr("node-1"),
-						TargetRef: &corev1.ObjectReference{
-							Kind:      "Pod",
-							Namespace: namespace,
-							Name:      "pod1",
-						},
-					},
-				},
-			},
-			expectedLabels: map[string]string{
-				discovery.LabelManagedBy:   controllerName,
-				discovery.LabelServiceName: "foo",
-				corev1.IsHeadlessService:   "",
-			},
-		},
-		"ipv4-with-terminating-gate-enabled": {
-			service: svcv4,
-			expectedEndpointPerSlice: map[discovery.AddressType][]discovery.Endpoint{
-				discovery.AddressTypeIPv4: {
-					{
 						Addresses: []string{"1.2.3.4"},
 						Conditions: discovery.EndpointConditions{
-							Ready:       utilpointer.BoolPtr(true),
-							Serving:     utilpointer.BoolPtr(true),
-							Terminating: utilpointer.BoolPtr(false),
+							Ready:       pointer.Bool(true),
+							Serving:     pointer.Bool(true),
+							Terminating: pointer.Bool(false),
 						},
-						Zone:     utilpointer.StringPtr("us-central1-a"),
-						NodeName: utilpointer.StringPtr("node-1"),
+						Zone:     pointer.String("us-central1-a"),
+						NodeName: pointer.String("node-1"),
 						TargetRef: &corev1.ObjectReference{
 							Kind:      "Pod",
 							Namespace: namespace,
@@ -192,17 +170,20 @@ func TestReconcile1Pod(t *testing.T) {
 				discovery.LabelServiceName: "foo",
 				corev1.IsHeadlessService:   "",
 			},
-			terminatingGateEnabled: true,
 		},
 		"ipv4-clusterip": {
 			service: svcv4ClusterIP,
 			expectedEndpointPerSlice: map[discovery.AddressType][]discovery.Endpoint{
 				discovery.AddressTypeIPv4: {
 					{
-						Addresses:  []string{"1.2.3.4"},
-						Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-						Zone:       utilpointer.StringPtr("us-central1-a"),
-						NodeName:   utilpointer.StringPtr("node-1"),
+						Addresses: []string{"1.2.3.4"},
+						Conditions: discovery.EndpointConditions{
+							Ready:       pointer.Bool(true),
+							Serving:     pointer.Bool(true),
+							Terminating: pointer.Bool(false),
+						},
+						Zone:     pointer.String("us-central1-a"),
+						NodeName: pointer.String("node-1"),
 						TargetRef: &corev1.ObjectReference{
 							Kind:      "Pod",
 							Namespace: namespace,
@@ -213,10 +194,14 @@ func TestReconcile1Pod(t *testing.T) {
 			},
 			expectedAddressType: discovery.AddressTypeIPv4,
 			expectedEndpoint: discovery.Endpoint{
-				Addresses:  []string{"1.2.3.4"},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-				Zone:       utilpointer.StringPtr("us-central1-a"),
-				NodeName:   utilpointer.StringPtr("node-1"),
+				Addresses: []string{"1.2.3.4"},
+				Conditions: discovery.EndpointConditions{
+					Ready:       pointer.Bool(true),
+					Serving:     pointer.Bool(true),
+					Terminating: pointer.Bool(false),
+				},
+				Zone:     pointer.String("us-central1-a"),
+				NodeName: pointer.String("node-1"),
 				TargetRef: &corev1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: namespace,
@@ -233,10 +218,14 @@ func TestReconcile1Pod(t *testing.T) {
 			expectedEndpointPerSlice: map[discovery.AddressType][]discovery.Endpoint{
 				discovery.AddressTypeIPv4: {
 					{
-						Addresses:  []string{"1.2.3.4"},
-						Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-						Zone:       utilpointer.StringPtr("us-central1-a"),
-						NodeName:   utilpointer.StringPtr("node-1"),
+						Addresses: []string{"1.2.3.4"},
+						Conditions: discovery.EndpointConditions{
+							Ready:       pointer.Bool(true),
+							Serving:     pointer.Bool(true),
+							Terminating: pointer.Bool(false),
+						},
+						Zone:     pointer.String("us-central1-a"),
+						NodeName: pointer.String("node-1"),
 						TargetRef: &corev1.ObjectReference{
 							Kind:      "Pod",
 							Namespace: namespace,
@@ -247,10 +236,14 @@ func TestReconcile1Pod(t *testing.T) {
 			},
 			expectedAddressType: discovery.AddressTypeIPv4,
 			expectedEndpoint: discovery.Endpoint{
-				Addresses:  []string{"1.2.3.4"},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-				Zone:       utilpointer.StringPtr("us-central1-a"),
-				NodeName:   utilpointer.StringPtr("node-1"),
+				Addresses: []string{"1.2.3.4"},
+				Conditions: discovery.EndpointConditions{
+					Ready:       pointer.Bool(true),
+					Serving:     pointer.Bool(true),
+					Terminating: pointer.Bool(false),
+				},
+				Zone:     pointer.String("us-central1-a"),
+				NodeName: pointer.String("node-1"),
 				TargetRef: &corev1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: namespace,
@@ -269,10 +262,14 @@ func TestReconcile1Pod(t *testing.T) {
 			expectedEndpointPerSlice: map[discovery.AddressType][]discovery.Endpoint{
 				discovery.AddressTypeIPv4: {
 					{
-						Addresses:  []string{"1.2.3.4"},
-						Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-						Zone:       utilpointer.StringPtr("us-central1-a"),
-						NodeName:   utilpointer.StringPtr("node-1"),
+						Addresses: []string{"1.2.3.4"},
+						Conditions: discovery.EndpointConditions{
+							Ready:       pointer.Bool(true),
+							Serving:     pointer.Bool(true),
+							Terminating: pointer.Bool(false),
+						},
+						Zone:     pointer.String("us-central1-a"),
+						NodeName: pointer.String("node-1"),
 						TargetRef: &corev1.ObjectReference{
 							Kind:      "Pod",
 							Namespace: namespace,
@@ -283,10 +280,14 @@ func TestReconcile1Pod(t *testing.T) {
 			},
 			expectedAddressType: discovery.AddressTypeIPv4,
 			expectedEndpoint: discovery.Endpoint{
-				Addresses:  []string{"1.2.3.4"},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-				Zone:       utilpointer.StringPtr("us-central1-a"),
-				NodeName:   utilpointer.StringPtr("node-1"),
+				Addresses: []string{"1.2.3.4"},
+				Conditions: discovery.EndpointConditions{
+					Ready:       pointer.Bool(true),
+					Serving:     pointer.Bool(true),
+					Terminating: pointer.Bool(false),
+				},
+				Zone:     pointer.String("us-central1-a"),
+				NodeName: pointer.String("node-1"),
 				TargetRef: &corev1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: namespace,
@@ -305,10 +306,14 @@ func TestReconcile1Pod(t *testing.T) {
 			expectedEndpointPerSlice: map[discovery.AddressType][]discovery.Endpoint{
 				discovery.AddressTypeIPv6: {
 					{
-						Addresses:  []string{"1234::5678:0000:0000:9abc:def0"},
-						Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-						Zone:       utilpointer.StringPtr("us-central1-a"),
-						NodeName:   utilpointer.StringPtr("node-1"),
+						Addresses: []string{"1234::5678:0000:0000:9abc:def0"},
+						Conditions: discovery.EndpointConditions{
+							Ready:       pointer.Bool(true),
+							Serving:     pointer.Bool(true),
+							Terminating: pointer.Bool(false),
+						},
+						Zone:     pointer.String("us-central1-a"),
+						NodeName: pointer.String("node-1"),
 						TargetRef: &corev1.ObjectReference{
 							Kind:      "Pod",
 							Namespace: namespace,
@@ -329,10 +334,14 @@ func TestReconcile1Pod(t *testing.T) {
 			expectedEndpointPerSlice: map[discovery.AddressType][]discovery.Endpoint{
 				discovery.AddressTypeIPv6: {
 					{
-						Addresses:  []string{"1234::5678:0000:0000:9abc:def0"},
-						Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-						Zone:       utilpointer.StringPtr("us-central1-a"),
-						NodeName:   utilpointer.StringPtr("node-1"),
+						Addresses: []string{"1234::5678:0000:0000:9abc:def0"},
+						Conditions: discovery.EndpointConditions{
+							Ready:       pointer.Bool(true),
+							Serving:     pointer.Bool(true),
+							Terminating: pointer.Bool(false),
+						},
+						Zone:     pointer.String("us-central1-a"),
+						NodeName: pointer.String("node-1"),
 						TargetRef: &corev1.ObjectReference{
 							Kind:      "Pod",
 							Namespace: namespace,
@@ -352,10 +361,14 @@ func TestReconcile1Pod(t *testing.T) {
 			expectedEndpointPerSlice: map[discovery.AddressType][]discovery.Endpoint{
 				discovery.AddressTypeIPv6: {
 					{
-						Addresses:  []string{"1234::5678:0000:0000:9abc:def0"},
-						Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-						Zone:       utilpointer.StringPtr("us-central1-a"),
-						NodeName:   utilpointer.StringPtr("node-1"),
+						Addresses: []string{"1234::5678:0000:0000:9abc:def0"},
+						Conditions: discovery.EndpointConditions{
+							Ready:       pointer.Bool(true),
+							Serving:     pointer.Bool(true),
+							Terminating: pointer.Bool(false),
+						},
+						Zone:     pointer.String("us-central1-a"),
+						NodeName: pointer.String("node-1"),
 						TargetRef: &corev1.ObjectReference{
 							Kind:      "Pod",
 							Namespace: namespace,
@@ -365,10 +378,14 @@ func TestReconcile1Pod(t *testing.T) {
 				},
 				discovery.AddressTypeIPv4: {
 					{
-						Addresses:  []string{"1.2.3.4"},
-						Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-						Zone:       utilpointer.StringPtr("us-central1-a"),
-						NodeName:   utilpointer.StringPtr("node-1"),
+						Addresses: []string{"1.2.3.4"},
+						Conditions: discovery.EndpointConditions{
+							Ready:       pointer.Bool(true),
+							Serving:     pointer.Bool(true),
+							Terminating: pointer.Bool(false),
+						},
+						Zone:     pointer.String("us-central1-a"),
+						NodeName: pointer.String("node-1"),
 						TargetRef: &corev1.ObjectReference{
 							Kind:      "Pod",
 							Namespace: namespace,
@@ -386,8 +403,6 @@ func TestReconcile1Pod(t *testing.T) {
 
 	for name, testCase := range testCases {
 		t.Run(name, func(t *testing.T) {
-			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.EndpointSliceTerminatingCondition, testCase.terminatingGateEnabled)()
-
 			client := newClientset()
 			setupMetrics()
 			triggerTime := time.Now().UTC()
@@ -480,8 +495,8 @@ func TestReconcile1EndpointSlice(t *testing.T) {
 		},
 		{
 			desc:        "Existing placeholder that's the same",
-			existing:    newEndpointSlice(&svc, &endpointMeta{Ports: []discovery.EndpointPort{}, AddressType: discovery.AddressTypeIPv4}),
-			wantMetrics: expectedMetrics{desiredSlices: 0, actualSlices: 0, desiredEndpoints: 0, addedPerSync: 0, removedPerSync: 0, numCreated: 0, numUpdated: 0, numDeleted: 0, slicesChangedPerSync: 0},
+			existing:    newEndpointSlice(&svc, &endpointMeta{ports: []discovery.EndpointPort{}, addressType: discovery.AddressTypeIPv4}),
+			wantMetrics: expectedMetrics{desiredSlices: 1, actualSlices: 1, desiredEndpoints: 0, addedPerSync: 0, removedPerSync: 0, numCreated: 0, numUpdated: 0, numDeleted: 0, slicesChangedPerSync: 0},
 		},
 		{
 			desc:        "Existing placeholder that's different",
@@ -1007,7 +1022,7 @@ func TestReconcileEndpointSlicesReplaceDeprecated(t *testing.T) {
 
 	svc, endpointMeta := newServiceAndEndpointMeta("foo", namespace)
 	// "IP" is a deprecated address type, ensuring that it is handled properly.
-	endpointMeta.AddressType = discovery.AddressType("IP")
+	endpointMeta.addressType = discovery.AddressType("IP")
 
 	existingSlices := []*discovery.EndpointSlice{}
 	pods := []*corev1.Pod{}
@@ -1177,9 +1192,9 @@ func TestReconcileEndpointSlicesNamedPorts(t *testing.T) {
 	for i := range fetchedSlices {
 		expectedSlices = append(expectedSlices, discovery.EndpointSlice{
 			Ports: []discovery.EndpointPort{{
-				Name:     utilpointer.StringPtr(""),
+				Name:     pointer.String(""),
 				Protocol: &protoTCP,
-				Port:     utilpointer.Int32Ptr(int32(8080 + i)),
+				Port:     pointer.Int32(int32(8080 + i)),
 			}},
 			AddressType: discovery.AddressTypeIPv4,
 		})
@@ -1352,8 +1367,8 @@ func TestReconcilerFinalizeSvcDeletionTimestamp(t *testing.T) {
 					Name:            "to-create",
 					OwnerReferences: []metav1.OwnerReference{*ownerRef},
 				},
-				AddressType: endpointMeta.AddressType,
-				Ports:       endpointMeta.Ports,
+				AddressType: endpointMeta.addressType,
+				Ports:       endpointMeta.ports,
 			}
 
 			// Add EndpointSlice that can be updated.
@@ -1362,8 +1377,8 @@ func TestReconcilerFinalizeSvcDeletionTimestamp(t *testing.T) {
 					Name:            "to-update",
 					OwnerReferences: []metav1.OwnerReference{*ownerRef},
 				},
-				AddressType: endpointMeta.AddressType,
-				Ports:       endpointMeta.Ports,
+				AddressType: endpointMeta.addressType,
+				Ports:       endpointMeta.ports,
 			}, metav1.CreateOptions{})
 			if err != nil {
 				t.Fatalf("Expected no error creating EndpointSlice during test setup, got %v", err)
@@ -1378,8 +1393,8 @@ func TestReconcilerFinalizeSvcDeletionTimestamp(t *testing.T) {
 					Name:            "to-delete",
 					OwnerReferences: []metav1.OwnerReference{*ownerRef},
 				},
-				AddressType: endpointMeta.AddressType,
-				Ports:       endpointMeta.Ports,
+				AddressType: endpointMeta.addressType,
+				Ports:       endpointMeta.ports,
 			}, metav1.CreateOptions{})
 			if err != nil {
 				t.Fatalf("Expected no error creating EndpointSlice during test setup, got %v", err)
@@ -1438,6 +1453,191 @@ func TestReconcilerFinalizeSvcDeletionTimestamp(t *testing.T) {
 	}
 }
 
+// When a Pod references a Node that is not present in the informer cache the
+// EndpointSlices will continue to allow create, updates and deletes through.
+// The Pod with the missing reference will be published or retried depending of
+// the service.spec.PublishNotReadyAddresses.
+// The test considers two Pods on different nodes, one of the Nodes is not present.
+func TestReconcilerPodMissingNode(t *testing.T) {
+	namespace := "test"
+
+	nodes := make([]*corev1.Node, 2)
+	nodes[0] = &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-0"}}
+	nodes[1] = &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}}
+
+	pods := make([]*corev1.Pod, 2)
+	pods[0] = newPod(0, namespace, true, 1, false)
+	pods[0].Spec.NodeName = nodes[0].Name
+	pods[1] = newPod(1, namespace, true, 1, false)
+	pods[1].Spec.NodeName = nodes[1].Name
+
+	service, endpointMeta := newServiceAndEndpointMeta("foo", namespace)
+
+	testCases := []struct {
+		name            string
+		publishNotReady bool
+		existingNodes   []*corev1.Node
+		existingSlice   func() *discovery.EndpointSlice
+		expectedMetrics expectedMetrics
+		expectError     bool
+	}{{
+		name:            "Create and publishNotReady false",
+		publishNotReady: false,
+		existingNodes:   []*corev1.Node{nodes[0]},
+		expectedMetrics: expectedMetrics{
+			desiredSlices:        1,
+			actualSlices:         1,
+			desiredEndpoints:     1,
+			addedPerSync:         1,
+			removedPerSync:       0,
+			numCreated:           1,
+			numUpdated:           0,
+			numDeleted:           0,
+			slicesChangedPerSync: 1,
+		},
+		expectError: true,
+	}, {
+		name:            "Create and publishNotReady true",
+		publishNotReady: true,
+		existingNodes:   []*corev1.Node{nodes[0]},
+		expectedMetrics: expectedMetrics{
+			desiredSlices:        1,
+			actualSlices:         1,
+			desiredEndpoints:     2,
+			addedPerSync:         2,
+			removedPerSync:       0,
+			numCreated:           1,
+			numUpdated:           0,
+			numDeleted:           0,
+			slicesChangedPerSync: 1,
+		},
+		expectError: false,
+	}, {
+		name:            "Update and publishNotReady false",
+		publishNotReady: false,
+		existingNodes:   []*corev1.Node{nodes[0]},
+		existingSlice: func() *discovery.EndpointSlice {
+			slice := newEmptyEndpointSlice(1, namespace, endpointMeta, service)
+			slice.Endpoints = append(slice.Endpoints, podToEndpoint(pods[0], nodes[0], &service, discovery.AddressTypeIPv4))
+			slice.Endpoints = append(slice.Endpoints, podToEndpoint(pods[1], nodes[1], &service, discovery.AddressTypeIPv4))
+			return slice
+		},
+		expectedMetrics: expectedMetrics{
+			desiredSlices:        1,
+			actualSlices:         1,
+			desiredEndpoints:     1,
+			addedPerSync:         0,
+			removedPerSync:       1,
+			numCreated:           0,
+			numUpdated:           1,
+			numDeleted:           0,
+			slicesChangedPerSync: 1,
+		},
+		expectError: true,
+	}, {
+		name:            "Update and publishNotReady true and all nodes missing",
+		publishNotReady: true,
+		existingSlice: func() *discovery.EndpointSlice {
+			slice := newEmptyEndpointSlice(1, namespace, endpointMeta, service)
+			slice.Endpoints = append(slice.Endpoints, podToEndpoint(pods[0], nodes[0], &service, discovery.AddressTypeIPv4))
+			slice.Endpoints = append(slice.Endpoints, podToEndpoint(pods[1], nodes[1], &service, discovery.AddressTypeIPv4))
+			return slice
+		},
+		expectedMetrics: expectedMetrics{
+			desiredSlices:        1,
+			actualSlices:         1,
+			desiredEndpoints:     2,
+			addedPerSync:         0,
+			removedPerSync:       0,
+			numCreated:           0,
+			numUpdated:           0,
+			numDeleted:           0,
+			slicesChangedPerSync: 0,
+		},
+		expectError: false,
+	}, {
+		name:            "Update and publishNotReady true",
+		publishNotReady: true,
+		existingNodes:   []*corev1.Node{nodes[0]},
+		existingSlice: func() *discovery.EndpointSlice {
+			slice := newEmptyEndpointSlice(1, namespace, endpointMeta, service)
+			slice.Endpoints = append(slice.Endpoints, podToEndpoint(pods[0], nodes[0], &service, discovery.AddressTypeIPv4))
+			slice.Endpoints = append(slice.Endpoints, podToEndpoint(pods[1], nodes[1], &service, discovery.AddressTypeIPv4))
+			return slice
+		},
+		expectedMetrics: expectedMetrics{
+			desiredSlices:        1,
+			actualSlices:         1,
+			desiredEndpoints:     2,
+			addedPerSync:         0,
+			removedPerSync:       0,
+			numCreated:           0,
+			numUpdated:           0,
+			numDeleted:           0,
+			slicesChangedPerSync: 0,
+		},
+		expectError: false,
+	}, {
+		name:            "Update if publishNotReady false and no nodes are present",
+		publishNotReady: false,
+		existingNodes:   []*corev1.Node{},
+		existingSlice: func() *discovery.EndpointSlice {
+			slice := newEmptyEndpointSlice(1, namespace, endpointMeta, service)
+			slice.Endpoints = append(slice.Endpoints, podToEndpoint(pods[0], nodes[0], &service, discovery.AddressTypeIPv4))
+			slice.Endpoints = append(slice.Endpoints, podToEndpoint(pods[1], nodes[1], &service, discovery.AddressTypeIPv4))
+			return slice
+		},
+		expectedMetrics: expectedMetrics{
+			desiredSlices:    1,
+			actualSlices:     1,
+			desiredEndpoints: 0,
+			addedPerSync:     0,
+			removedPerSync:   2,
+			numCreated:       0,
+			// the slice is updated not deleted
+			numUpdated:           1,
+			numDeleted:           0,
+			slicesChangedPerSync: 1,
+		},
+		expectError: true,
+	},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newClientset()
+			setupMetrics()
+			r := newReconciler(client, tc.existingNodes, defaultMaxEndpointsPerSlice)
+
+			svc := service.DeepCopy()
+			svc.Spec.PublishNotReadyAddresses = tc.publishNotReady
+			existingSlices := []*discovery.EndpointSlice{}
+			if tc.existingSlice != nil {
+				slice := tc.existingSlice()
+				existingSlices = append(existingSlices, slice)
+				_, createErr := client.DiscoveryV1().EndpointSlices(namespace).Create(context.TODO(), slice, metav1.CreateOptions{})
+				if createErr != nil {
+					t.Errorf("Expected no error creating endpoint slice")
+				}
+			}
+			err := r.reconcile(svc, pods, existingSlices, time.Now())
+			if err == nil && tc.expectError {
+				t.Errorf("Expected error but no error received")
+			}
+			if err != nil && !tc.expectError {
+				t.Errorf("Unexpected error: %v", err)
+			}
+
+			fetchedSlices := fetchEndpointSlices(t, client, namespace)
+			if len(fetchedSlices) != tc.expectedMetrics.actualSlices {
+				t.Fatalf("Actual slices %d doesn't match metric %d", len(fetchedSlices), tc.expectedMetrics.actualSlices)
+			}
+			expectMetrics(t, tc.expectedMetrics)
+
+		})
+	}
+}
+
 func TestReconcileTopology(t *testing.T) {
 	ns := "testing"
 	svc, endpointMeta := newServiceAndEndpointMeta("foo", ns)
@@ -1487,7 +1687,7 @@ func TestReconcileTopology(t *testing.T) {
 	for name, pods := range slicePods {
 		endpoints := []discovery.Endpoint{}
 		for _, pod := range pods {
-			endpoints = append(endpoints, podToEndpoint(pod, nodesByName[pod.Spec.NodeName], &svc, endpointMeta.AddressType))
+			endpoints = append(endpoints, podToEndpoint(pod, nodesByName[pod.Spec.NodeName], &svc, endpointMeta.addressType))
 		}
 
 		slicesByName[name] = &discovery.EndpointSlice{
@@ -1499,8 +1699,8 @@ func TestReconcileTopology(t *testing.T) {
 					discovery.LabelServiceName: svc.Name,
 				},
 			},
-			AddressType: endpointMeta.AddressType,
-			Ports:       endpointMeta.Ports,
+			AddressType: endpointMeta.addressType,
+			Ports:       endpointMeta.ports,
 			Endpoints:   endpoints,
 		}
 	}
@@ -1594,7 +1794,7 @@ func TestReconcileTopology(t *testing.T) {
 		expectedCrossZoneHints: 1,
 		expectedMetrics: expectedMetrics{
 			desiredSlices:    1,
-			actualSlices:     1,
+			actualSlices:     2,
 			desiredEndpoints: 9,
 			addedPerSync:     0,
 			removedPerSync:   0,
@@ -1617,7 +1817,7 @@ func TestReconcileTopology(t *testing.T) {
 		expectedCrossZoneHints: 0,
 		expectedMetrics: expectedMetrics{
 			desiredSlices:        1,
-			actualSlices:         1,
+			actualSlices:         2,
 			desiredEndpoints:     9,
 			addedPerSync:         0,
 			removedPerSync:       0,
@@ -1643,13 +1843,16 @@ func TestReconcileTopology(t *testing.T) {
 
 			service := svc.DeepCopy()
 			service.Annotations = map[string]string{
-				corev1.AnnotationTopologyAwareHints: tc.hintsAnnotation,
+				corev1.DeprecatedAnnotationTopologyAwareHints: tc.hintsAnnotation,
 			}
 			r.reconcile(service, tc.pods, tc.existingSlices, time.Now())
 
 			cmc.Check(t)
 			expectMetrics(t, tc.expectedMetrics)
 			fetchedSlices := fetchEndpointSlices(t, client, ns)
+			if len(fetchedSlices) != tc.expectedMetrics.actualSlices {
+				t.Fatalf("Actual slices %d doesn't match metric %d", len(fetchedSlices), tc.expectedMetrics.actualSlices)
+			}
 
 			if tc.expectedHints == nil {
 				for _, slice := range fetchedSlices {
@@ -1706,6 +1909,7 @@ func TestReconcileTopology(t *testing.T) {
 // Test Helpers
 
 func newReconciler(client *fake.Clientset, nodes []*corev1.Node, maxEndpointsPerSlice int32) *reconciler {
+	eventRecorder := record.NewFakeRecorder(10)
 	informerFactory := informers.NewSharedInformerFactory(client, controller.NoResyncPeriodFunc())
 	nodeInformer := informerFactory.Core().V1().Nodes()
 	indexer := nodeInformer.Informer().GetIndexer()
@@ -1719,6 +1923,7 @@ func newReconciler(client *fake.Clientset, nodes []*corev1.Node, maxEndpointsPer
 		maxEndpointsPerSlice: maxEndpointsPerSlice,
 		endpointSliceTracker: endpointsliceutil.NewEndpointSliceTracker(),
 		metricsCache:         metrics.NewCache(maxEndpointsPerSlice),
+		eventRecorder:        eventRecorder,
 	}
 }
 
@@ -1864,7 +2069,7 @@ func expectMetrics(t *testing.T, em expectedMetrics) {
 
 	actualNumSlices, err := testutil.GetGaugeMetricValue(metrics.NumEndpointSlices.WithLabelValues())
 	handleErr(t, err, "numEndpointSlices")
-	if actualDesiredSlices != float64(em.desiredSlices) {
+	if actualNumSlices != float64(em.actualSlices) {
 		t.Errorf("Expected numEndpointSlices to be %d, got %v", em.actualSlices, actualNumSlices)
 	}
 

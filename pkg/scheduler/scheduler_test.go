@@ -28,20 +28,26 @@ import (
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/klog/v2/ktesting"
 	schedulerapi "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultbinder"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/queuesort"
 	frameworkruntime "k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	internalcache "k8s.io/kubernetes/pkg/scheduler/internal/cache"
 	internalqueue "k8s.io/kubernetes/pkg/scheduler/internal/queue"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
 	testingclock "k8s.io/utils/clock/testing"
+	"k8s.io/utils/pointer"
 )
 
 func TestSchedulerCreation(t *testing.T) {
@@ -168,14 +174,15 @@ func TestSchedulerCreation(t *testing.T) {
 
 			eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: client.EventsV1()})
 
-			stopCh := make(chan struct{})
-			defer close(stopCh)
+			_, ctx := ktesting.NewTestContext(t)
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
 			s, err := New(
+				ctx,
 				client,
 				informerFactory,
 				nil,
 				profile.NewRecorderFactory(eventBroadcaster),
-				stopCh,
 				tc.opts...,
 			)
 
@@ -226,32 +233,28 @@ func TestSchedulerCreation(t *testing.T) {
 	}
 }
 
-func TestDefaultErrorFunc(t *testing.T) {
+func TestFailureHandler(t *testing.T) {
 	testPod := st.MakePod().Name("test-pod").Namespace(v1.NamespaceDefault).Obj()
 	testPodUpdated := testPod.DeepCopy()
 	testPodUpdated.Labels = map[string]string{"foo": ""}
 
 	tests := []struct {
 		name                       string
-		injectErr                  error
 		podUpdatedDuringScheduling bool // pod is updated during a scheduling cycle
 		podDeletedDuringScheduling bool // pod is deleted during a scheduling cycle
 		expect                     *v1.Pod
 	}{
 		{
 			name:                       "pod is updated during a scheduling cycle",
-			injectErr:                  nil,
 			podUpdatedDuringScheduling: true,
 			expect:                     testPodUpdated,
 		},
 		{
-			name:      "pod is not updated during a scheduling cycle",
-			injectErr: nil,
-			expect:    testPod,
+			name:   "pod is not updated during a scheduling cycle",
+			expect: testPod,
 		},
 		{
 			name:                       "pod is deleted during a scheduling cycle",
-			injectErr:                  nil,
 			podDeletedDuringScheduling: true,
 			expect:                     nil,
 		},
@@ -259,8 +262,8 @@ func TestDefaultErrorFunc(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stopCh := make(chan struct{})
-			defer close(stopCh)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 
 			client := fake.NewSimpleClientset(&v1.PodList{Items: []v1.Pod{*testPod}})
 			informerFactory := informers.NewSharedInformerFactory(client, 0)
@@ -269,7 +272,7 @@ func TestDefaultErrorFunc(t *testing.T) {
 			podInformer.Informer().GetStore().Add(testPod)
 
 			queue := internalqueue.NewPriorityQueue(nil, informerFactory, internalqueue.WithClock(testingclock.NewFakeClock(time.Now())))
-			schedulerCache := internalcache.New(30*time.Second, stopCh)
+			schedulerCache := internalcache.New(30*time.Second, ctx.Done())
 
 			queue.Add(testPod)
 			queue.Pop()
@@ -283,9 +286,13 @@ func TestDefaultErrorFunc(t *testing.T) {
 				queue.Delete(testPod)
 			}
 
-			testPodInfo := &framework.QueuedPodInfo{PodInfo: framework.NewPodInfo(testPod)}
-			errFunc := MakeDefaultErrorFunc(client, podInformer.Lister(), queue, schedulerCache)
-			errFunc(testPodInfo, tt.injectErr)
+			s, fwk, err := initScheduler(ctx, schedulerCache, queue, client, informerFactory)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			testPodInfo := &framework.QueuedPodInfo{PodInfo: mustNewPodInfo(t, testPod)}
+			s.FailureHandler(ctx, fwk, testPodInfo, framework.NewStatus(framework.Unschedulable), nil, time.Now())
 
 			var got *v1.Pod
 			if tt.podUpdatedDuringScheduling {
@@ -305,7 +312,7 @@ func TestDefaultErrorFunc(t *testing.T) {
 	}
 }
 
-func TestDefaultErrorFunc_NodeNotFound(t *testing.T) {
+func TestFailureHandler_NodeNotFound(t *testing.T) {
 	nodeFoo := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "foo"}}
 	nodeBar := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "bar"}}
 	testPod := st.MakePod().Name("test-pod").Namespace(v1.NamespaceDefault).Obj()
@@ -314,20 +321,20 @@ func TestDefaultErrorFunc_NodeNotFound(t *testing.T) {
 		nodes            []v1.Node
 		nodeNameToDelete string
 		injectErr        error
-		expectNodeNames  sets.String
+		expectNodeNames  sets.Set[string]
 	}{
 		{
 			name:             "node is deleted during a scheduling cycle",
 			nodes:            []v1.Node{*nodeFoo, *nodeBar},
 			nodeNameToDelete: "foo",
 			injectErr:        apierrors.NewNotFound(v1.Resource("node"), nodeFoo.Name),
-			expectNodeNames:  sets.NewString("bar"),
+			expectNodeNames:  sets.New("bar"),
 		},
 		{
 			name:            "node is not deleted but NodeNotFound is received incorrectly",
 			nodes:           []v1.Node{*nodeFoo, *nodeBar},
 			injectErr:       apierrors.NewNotFound(v1.Resource("node"), nodeFoo.Name),
-			expectNodeNames: sets.NewString("foo", "bar"),
+			expectNodeNames: sets.New("foo", "bar"),
 		},
 	}
 
@@ -354,12 +361,16 @@ func TestDefaultErrorFunc_NodeNotFound(t *testing.T) {
 				}
 			}
 
-			testPodInfo := &framework.QueuedPodInfo{PodInfo: framework.NewPodInfo(testPod)}
-			errFunc := MakeDefaultErrorFunc(client, podInformer.Lister(), queue, schedulerCache)
-			errFunc(testPodInfo, tt.injectErr)
+			s, fwk, err := initScheduler(ctx, schedulerCache, queue, client, informerFactory)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			testPodInfo := &framework.QueuedPodInfo{PodInfo: mustNewPodInfo(t, testPod)}
+			s.FailureHandler(ctx, fwk, testPodInfo, framework.NewStatus(framework.Unschedulable).WithError(tt.injectErr), nil, time.Now())
 
 			gotNodes := schedulerCache.Dump().Nodes
-			gotNodeNames := sets.NewString()
+			gotNodeNames := sets.New[string]()
 			for _, nodeInfo := range gotNodes {
 				gotNodeNames.Insert(nodeInfo.Node().Name)
 			}
@@ -370,9 +381,9 @@ func TestDefaultErrorFunc_NodeNotFound(t *testing.T) {
 	}
 }
 
-func TestDefaultErrorFunc_PodAlreadyBound(t *testing.T) {
-	stopCh := make(chan struct{})
-	defer close(stopCh)
+func TestFailureHandler_PodAlreadyBound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	nodeFoo := v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "foo"}}
 	testPod := st.MakePod().Name("test-pod").Namespace(v1.NamespaceDefault).Node("foo").Obj()
@@ -384,14 +395,18 @@ func TestDefaultErrorFunc_PodAlreadyBound(t *testing.T) {
 	podInformer.Informer().GetStore().Add(testPod)
 
 	queue := internalqueue.NewPriorityQueue(nil, informerFactory, internalqueue.WithClock(testingclock.NewFakeClock(time.Now())))
-	schedulerCache := internalcache.New(30*time.Second, stopCh)
+	schedulerCache := internalcache.New(30*time.Second, ctx.Done())
 
 	// Add node to schedulerCache no matter it's deleted in API server or not.
 	schedulerCache.AddNode(&nodeFoo)
 
-	testPodInfo := &framework.QueuedPodInfo{PodInfo: framework.NewPodInfo(testPod)}
-	errFunc := MakeDefaultErrorFunc(client, podInformer.Lister(), queue, schedulerCache)
-	errFunc(testPodInfo, fmt.Errorf("binding rejected: timeout"))
+	s, fwk, err := initScheduler(ctx, schedulerCache, queue, client, informerFactory)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testPodInfo := &framework.QueuedPodInfo{PodInfo: mustNewPodInfo(t, testPod)}
+	s.FailureHandler(ctx, fwk, testPodInfo, framework.NewStatus(framework.Unschedulable).WithError(fmt.Errorf("binding rejected: timeout")), nil, time.Now())
 
 	pod := getPodFromPriorityQueue(queue, testPod)
 	if pod != nil {
@@ -399,10 +414,55 @@ func TestDefaultErrorFunc_PodAlreadyBound(t *testing.T) {
 	}
 }
 
+// TestWithPercentageOfNodesToScore tests scheduler's PercentageOfNodesToScore is set correctly.
+func TestWithPercentageOfNodesToScore(t *testing.T) {
+	tests := []struct {
+		name                           string
+		percentageOfNodesToScoreConfig *int32
+		wantedPercentageOfNodesToScore int32
+	}{
+		{
+			name:                           "percentageOfNodesScore is nil",
+			percentageOfNodesToScoreConfig: nil,
+			wantedPercentageOfNodesToScore: schedulerapi.DefaultPercentageOfNodesToScore,
+		},
+		{
+			name:                           "percentageOfNodesScore is not nil",
+			percentageOfNodesToScoreConfig: pointer.Int32(10),
+			wantedPercentageOfNodesToScore: 10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+			informerFactory := informers.NewSharedInformerFactory(client, 0)
+			eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: client.EventsV1()})
+			_, ctx := ktesting.NewTestContext(t)
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			sched, err := New(
+				ctx,
+				client,
+				informerFactory,
+				nil,
+				profile.NewRecorderFactory(eventBroadcaster),
+				WithPercentageOfNodesToScore(tt.percentageOfNodesToScoreConfig),
+			)
+			if err != nil {
+				t.Fatalf("Failed to create scheduler: %v", err)
+			}
+			if sched.percentageOfNodesToScore != tt.wantedPercentageOfNodesToScore {
+				t.Errorf("scheduler.percercentageOfNodesToScore = %v, want %v", sched.percentageOfNodesToScore, tt.wantedPercentageOfNodesToScore)
+			}
+		})
+	}
+}
+
 // getPodFromPriorityQueue is the function used in the TestDefaultErrorFunc test to get
 // the specific pod from the given priority queue. It returns the found pod in the priority queue.
 func getPodFromPriorityQueue(queue *internalqueue.PriorityQueue, pod *v1.Pod) *v1.Pod {
-	podList := queue.PendingPods()
+	podList, _ := queue.PendingPods()
 	if len(podList) == 0 {
 		return nil
 	}
@@ -424,4 +484,156 @@ func getPodFromPriorityQueue(queue *internalqueue.PriorityQueue, pod *v1.Pod) *v
 	}
 
 	return nil
+}
+
+func initScheduler(ctx context.Context, cache internalcache.Cache, queue internalqueue.SchedulingQueue,
+	client kubernetes.Interface, informerFactory informers.SharedInformerFactory) (*Scheduler, framework.Framework, error) {
+	registerPluginFuncs := []st.RegisterPluginFunc{
+		st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+		st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+	}
+	eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: client.EventsV1()})
+	fwk, err := st.NewFramework(ctx,
+		registerPluginFuncs,
+		testSchedulerName,
+		frameworkruntime.WithClientSet(client),
+		frameworkruntime.WithInformerFactory(informerFactory),
+		frameworkruntime.WithEventRecorder(eventBroadcaster.NewRecorder(scheme.Scheme, testSchedulerName)),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	s := &Scheduler{
+		Cache:           cache,
+		client:          client,
+		StopEverything:  ctx.Done(),
+		SchedulingQueue: queue,
+		Profiles:        profile.Map{testSchedulerName: fwk},
+	}
+	s.applyDefaultHandlers()
+
+	return s, fwk, nil
+}
+
+func TestInitPluginsWithIndexers(t *testing.T) {
+	tests := []struct {
+		name string
+		// the plugin registration ordering must not matter, being map traversal random
+		entrypoints map[string]frameworkruntime.PluginFactory
+		wantErr     string
+	}{
+		{
+			name: "register indexer, no conflicts",
+			entrypoints: map[string]frameworkruntime.PluginFactory{
+				"AddIndexer": func(obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+					podInformer := handle.SharedInformerFactory().Core().V1().Pods()
+					err := podInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{
+						"nodeName": indexByPodSpecNodeName,
+					})
+					return &TestPlugin{name: "AddIndexer"}, err
+				},
+			},
+		},
+		{
+			name: "register the same indexer name multiple times, conflict",
+			// order of registration doesn't matter
+			entrypoints: map[string]frameworkruntime.PluginFactory{
+				"AddIndexer1": func(obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+					podInformer := handle.SharedInformerFactory().Core().V1().Pods()
+					err := podInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{
+						"nodeName": indexByPodSpecNodeName,
+					})
+					return &TestPlugin{name: "AddIndexer1"}, err
+				},
+				"AddIndexer2": func(obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+					podInformer := handle.SharedInformerFactory().Core().V1().Pods()
+					err := podInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{
+						"nodeName": indexByPodAnnotationNodeName,
+					})
+					return &TestPlugin{name: "AddIndexer1"}, err
+				},
+			},
+			wantErr: "indexer conflict",
+		},
+		{
+			name: "register the same indexer body with different names, no conflicts",
+			// order of registration doesn't matter
+			entrypoints: map[string]frameworkruntime.PluginFactory{
+				"AddIndexer1": func(obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+					podInformer := handle.SharedInformerFactory().Core().V1().Pods()
+					err := podInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{
+						"nodeName1": indexByPodSpecNodeName,
+					})
+					return &TestPlugin{name: "AddIndexer1"}, err
+				},
+				"AddIndexer2": func(obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+					podInformer := handle.SharedInformerFactory().Core().V1().Pods()
+					err := podInformer.Informer().GetIndexer().AddIndexers(cache.Indexers{
+						"nodeName2": indexByPodAnnotationNodeName,
+					})
+					return &TestPlugin{name: "AddIndexer2"}, err
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeInformerFactory := NewInformerFactory(&fake.Clientset{}, 0*time.Second)
+
+			var registerPluginFuncs []st.RegisterPluginFunc
+			for name, entrypoint := range tt.entrypoints {
+				registerPluginFuncs = append(registerPluginFuncs,
+					// anything supported by TestPlugin is fine
+					st.RegisterFilterPlugin(name, entrypoint),
+				)
+			}
+			// we always need this
+			registerPluginFuncs = append(registerPluginFuncs,
+				st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			)
+			_, ctx := ktesting.NewTestContext(t)
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			_, err := st.NewFramework(ctx, registerPluginFuncs, "test", frameworkruntime.WithInformerFactory(fakeInformerFactory))
+
+			if len(tt.wantErr) > 0 {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("got error %q, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Failed to create scheduler: %v", err)
+			}
+		})
+	}
+}
+
+func indexByPodSpecNodeName(obj interface{}) ([]string, error) {
+	pod, ok := obj.(*v1.Pod)
+	if !ok {
+		return []string{}, nil
+	}
+	if len(pod.Spec.NodeName) == 0 {
+		return []string{}, nil
+	}
+	return []string{pod.Spec.NodeName}, nil
+}
+
+func indexByPodAnnotationNodeName(obj interface{}) ([]string, error) {
+	pod, ok := obj.(*v1.Pod)
+	if !ok {
+		return []string{}, nil
+	}
+	if len(pod.Annotations) == 0 {
+		return []string{}, nil
+	}
+	nodeName, ok := pod.Annotations["node-name"]
+	if !ok {
+		return []string{}, nil
+	}
+	return []string{nodeName}, nil
 }

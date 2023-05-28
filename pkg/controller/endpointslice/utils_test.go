@@ -31,12 +31,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/rand"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
-	featuregatetesting "k8s.io/component-base/featuregate/testing"
-	"k8s.io/kubernetes/pkg/features"
-	utilpointer "k8s.io/utils/pointer"
+	"k8s.io/utils/pointer"
 )
 
 func TestNewEndpointSlice(t *testing.T) {
@@ -44,8 +41,8 @@ func TestNewEndpointSlice(t *testing.T) {
 	portName := "foo"
 	protocol := v1.ProtocolTCP
 	endpointMeta := endpointMeta{
-		Ports:       []discovery.EndpointPort{{Name: &portName, Protocol: &protocol}},
-		AddressType: ipAddressType,
+		ports:       []discovery.EndpointPort{{Name: &portName, Protocol: &protocol}},
+		addressType: ipAddressType,
 	}
 	service := v1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "test"},
@@ -79,8 +76,8 @@ func TestNewEndpointSlice(t *testing.T) {
 					OwnerReferences: []metav1.OwnerReference{*ownerRef},
 					Namespace:       service.Namespace,
 				},
-				Ports:       endpointMeta.Ports,
-				AddressType: endpointMeta.AddressType,
+				Ports:       endpointMeta.ports,
+				AddressType: endpointMeta.addressType,
 				Endpoints:   []discovery.Endpoint{},
 			},
 		},
@@ -102,8 +99,8 @@ func TestNewEndpointSlice(t *testing.T) {
 					OwnerReferences: []metav1.OwnerReference{*ownerRef},
 					Namespace:       service.Namespace,
 				},
-				Ports:       endpointMeta.Ports,
-				AddressType: endpointMeta.AddressType,
+				Ports:       endpointMeta.ports,
+				AddressType: endpointMeta.addressType,
 				Endpoints:   []discovery.Endpoint{},
 			},
 		},
@@ -127,8 +124,8 @@ func TestNewEndpointSlice(t *testing.T) {
 					OwnerReferences: []metav1.OwnerReference{*ownerRef},
 					Namespace:       service.Namespace,
 				},
-				Ports:       endpointMeta.Ports,
-				AddressType: endpointMeta.AddressType,
+				Ports:       endpointMeta.ports,
+				AddressType: endpointMeta.addressType,
 				Endpoints:   []discovery.Endpoint{},
 			},
 		},
@@ -151,8 +148,8 @@ func TestNewEndpointSlice(t *testing.T) {
 					OwnerReferences: []metav1.OwnerReference{*ownerRef},
 					Namespace:       service.Namespace,
 				},
-				Ports:       endpointMeta.Ports,
-				AddressType: endpointMeta.AddressType,
+				Ports:       endpointMeta.ports,
+				AddressType: endpointMeta.addressType,
 				Endpoints:   []discovery.Endpoint{},
 			},
 		},
@@ -178,8 +175,8 @@ func TestNewEndpointSlice(t *testing.T) {
 					OwnerReferences: []metav1.OwnerReference{*ownerRef},
 					Namespace:       service.Namespace,
 				},
-				Ports:       endpointMeta.Ports,
-				AddressType: endpointMeta.AddressType,
+				Ports:       endpointMeta.ports,
+				AddressType: endpointMeta.addressType,
 				Endpoints:   []discovery.Endpoint{},
 			},
 		},
@@ -200,8 +197,8 @@ func TestNewEndpointSlice(t *testing.T) {
 					OwnerReferences: []metav1.OwnerReference{*ownerRef},
 					Namespace:       service.Namespace,
 				},
-				Ports:       endpointMeta.Ports,
-				AddressType: endpointMeta.AddressType,
+				Ports:       endpointMeta.ports,
+				AddressType: endpointMeta.addressType,
 				Endpoints:   []discovery.Endpoint{},
 			},
 		},
@@ -251,16 +248,19 @@ func TestPodToEndpoint(t *testing.T) {
 		svc                      *v1.Service
 		expectedEndpoint         discovery.Endpoint
 		publishNotReadyAddresses bool
-		terminatingGateEnabled   bool
 	}{
 		{
 			name: "Ready pod",
 			pod:  readyPod,
 			svc:  &svc,
 			expectedEndpoint: discovery.Endpoint{
-				Addresses:  []string{"1.2.3.5"},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-				NodeName:   utilpointer.StringPtr("node-1"),
+				Addresses: []string{"1.2.3.5"},
+				Conditions: discovery.EndpointConditions{
+					Ready:       pointer.Bool(true),
+					Serving:     pointer.Bool(true),
+					Terminating: pointer.Bool(false),
+				},
+				NodeName: pointer.String("node-1"),
 				TargetRef: &v1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: ns,
@@ -274,9 +274,13 @@ func TestPodToEndpoint(t *testing.T) {
 			pod:  readyPod,
 			svc:  &svcPublishNotReady,
 			expectedEndpoint: discovery.Endpoint{
-				Addresses:  []string{"1.2.3.5"},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-				NodeName:   utilpointer.StringPtr("node-1"),
+				Addresses: []string{"1.2.3.5"},
+				Conditions: discovery.EndpointConditions{
+					Ready:       pointer.Bool(true),
+					Serving:     pointer.Bool(true),
+					Terminating: pointer.Bool(false),
+				},
+				NodeName: pointer.String("node-1"),
 				TargetRef: &v1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: ns,
@@ -290,9 +294,13 @@ func TestPodToEndpoint(t *testing.T) {
 			pod:  unreadyPod,
 			svc:  &svc,
 			expectedEndpoint: discovery.Endpoint{
-				Addresses:  []string{"1.2.3.5"},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(false)},
-				NodeName:   utilpointer.StringPtr("node-1"),
+				Addresses: []string{"1.2.3.5"},
+				Conditions: discovery.EndpointConditions{
+					Ready:       pointer.Bool(false),
+					Serving:     pointer.Bool(false),
+					Terminating: pointer.Bool(false),
+				},
+				NodeName: pointer.String("node-1"),
 				TargetRef: &v1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: ns,
@@ -306,9 +314,13 @@ func TestPodToEndpoint(t *testing.T) {
 			pod:  unreadyPod,
 			svc:  &svcPublishNotReady,
 			expectedEndpoint: discovery.Endpoint{
-				Addresses:  []string{"1.2.3.5"},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-				NodeName:   utilpointer.StringPtr("node-1"),
+				Addresses: []string{"1.2.3.5"},
+				Conditions: discovery.EndpointConditions{
+					Ready:       pointer.Bool(true),
+					Serving:     pointer.Bool(false),
+					Terminating: pointer.Bool(false),
+				},
+				NodeName: pointer.String("node-1"),
 				TargetRef: &v1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: ns,
@@ -323,10 +335,14 @@ func TestPodToEndpoint(t *testing.T) {
 			node: node1,
 			svc:  &svc,
 			expectedEndpoint: discovery.Endpoint{
-				Addresses:  []string{"1.2.3.5"},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-				Zone:       utilpointer.StringPtr("us-central1-a"),
-				NodeName:   utilpointer.StringPtr("node-1"),
+				Addresses: []string{"1.2.3.5"},
+				Conditions: discovery.EndpointConditions{
+					Ready:       pointer.Bool(true),
+					Serving:     pointer.Bool(true),
+					Terminating: pointer.Bool(false),
+				},
+				Zone:     pointer.String("us-central1-a"),
+				NodeName: pointer.String("node-1"),
 				TargetRef: &v1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: ns,
@@ -341,10 +357,14 @@ func TestPodToEndpoint(t *testing.T) {
 			node: node1,
 			svc:  &svc,
 			expectedEndpoint: discovery.Endpoint{
-				Addresses:  []string{"1.2.3.4"},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-				Zone:       utilpointer.StringPtr("us-central1-a"),
-				NodeName:   utilpointer.StringPtr("node-1"),
+				Addresses: []string{"1.2.3.4"},
+				Conditions: discovery.EndpointConditions{
+					Ready:       pointer.Bool(true),
+					Serving:     pointer.Bool(true),
+					Terminating: pointer.Bool(false),
+				},
+				Zone:     pointer.String("us-central1-a"),
+				NodeName: pointer.String("node-1"),
 				TargetRef: &v1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: ns,
@@ -359,11 +379,15 @@ func TestPodToEndpoint(t *testing.T) {
 			node: node1,
 			svc:  &svc,
 			expectedEndpoint: discovery.Endpoint{
-				Addresses:  []string{"1.2.3.5"},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-				Hostname:   &readyPodHostname.Spec.Hostname,
-				Zone:       utilpointer.StringPtr("us-central1-a"),
-				NodeName:   utilpointer.StringPtr("node-1"),
+				Addresses: []string{"1.2.3.5"},
+				Conditions: discovery.EndpointConditions{
+					Ready:       pointer.Bool(true),
+					Serving:     pointer.Bool(true),
+					Terminating: pointer.Bool(false),
+				},
+				Hostname: &readyPodHostname.Spec.Hostname,
+				Zone:     pointer.String("us-central1-a"),
+				NodeName: pointer.String("node-1"),
 				TargetRef: &v1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: ns,
@@ -373,17 +397,17 @@ func TestPodToEndpoint(t *testing.T) {
 			},
 		},
 		{
-			name: "Ready pod, terminating gate enabled",
+			name: "Ready pod",
 			pod:  readyPod,
 			svc:  &svc,
 			expectedEndpoint: discovery.Endpoint{
 				Addresses: []string{"1.2.3.5"},
 				Conditions: discovery.EndpointConditions{
-					Ready:       utilpointer.BoolPtr(true),
-					Serving:     utilpointer.BoolPtr(true),
-					Terminating: utilpointer.BoolPtr(false),
+					Ready:       pointer.Bool(true),
+					Serving:     pointer.Bool(true),
+					Terminating: pointer.Bool(false),
 				},
-				NodeName: utilpointer.StringPtr("node-1"),
+				NodeName: pointer.String("node-1"),
 				TargetRef: &v1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: ns,
@@ -391,18 +415,19 @@ func TestPodToEndpoint(t *testing.T) {
 					UID:       readyPod.UID,
 				},
 			},
-			terminatingGateEnabled: true,
 		},
 		{
-			name: "Ready terminating pod, terminating gate disabled",
+			name: "Ready terminating pod",
 			pod:  readyTerminatingPod,
 			svc:  &svc,
 			expectedEndpoint: discovery.Endpoint{
 				Addresses: []string{"1.2.3.5"},
 				Conditions: discovery.EndpointConditions{
-					Ready: utilpointer.BoolPtr(false),
+					Ready:       pointer.Bool(false),
+					Serving:     pointer.Bool(true),
+					Terminating: pointer.Bool(true),
 				},
-				NodeName: utilpointer.StringPtr("node-1"),
+				NodeName: pointer.String("node-1"),
 				TargetRef: &v1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: ns,
@@ -410,39 +435,19 @@ func TestPodToEndpoint(t *testing.T) {
 					UID:       readyPod.UID,
 				},
 			},
-			terminatingGateEnabled: false,
 		},
 		{
-			name: "Ready terminating pod, terminating gate enabled",
-			pod:  readyTerminatingPod,
-			svc:  &svc,
-			expectedEndpoint: discovery.Endpoint{
-				Addresses: []string{"1.2.3.5"},
-				Conditions: discovery.EndpointConditions{
-					Ready:       utilpointer.BoolPtr(false),
-					Serving:     utilpointer.BoolPtr(true),
-					Terminating: utilpointer.BoolPtr(true),
-				},
-				NodeName: utilpointer.StringPtr("node-1"),
-				TargetRef: &v1.ObjectReference{
-					Kind:      "Pod",
-					Namespace: ns,
-					Name:      readyPod.Name,
-					UID:       readyPod.UID,
-				},
-			},
-			terminatingGateEnabled: true,
-		},
-		{
-			name: "Not ready terminating pod, terminating gate disabled",
+			name: "Not ready terminating pod",
 			pod:  unreadyTerminatingPod,
 			svc:  &svc,
 			expectedEndpoint: discovery.Endpoint{
 				Addresses: []string{"1.2.3.5"},
 				Conditions: discovery.EndpointConditions{
-					Ready: utilpointer.BoolPtr(false),
+					Ready:       pointer.Bool(false),
+					Serving:     pointer.Bool(false),
+					Terminating: pointer.Bool(true),
 				},
-				NodeName: utilpointer.StringPtr("node-1"),
+				NodeName: pointer.String("node-1"),
 				TargetRef: &v1.ObjectReference{
 					Kind:      "Pod",
 					Namespace: ns,
@@ -450,35 +455,11 @@ func TestPodToEndpoint(t *testing.T) {
 					UID:       readyPod.UID,
 				},
 			},
-			terminatingGateEnabled: false,
-		},
-		{
-			name: "Not ready terminating pod, terminating gate enabled",
-			pod:  unreadyTerminatingPod,
-			svc:  &svc,
-			expectedEndpoint: discovery.Endpoint{
-				Addresses: []string{"1.2.3.5"},
-				Conditions: discovery.EndpointConditions{
-					Ready:       utilpointer.BoolPtr(false),
-					Serving:     utilpointer.BoolPtr(false),
-					Terminating: utilpointer.BoolPtr(true),
-				},
-				NodeName: utilpointer.StringPtr("node-1"),
-				TargetRef: &v1.ObjectReference{
-					Kind:      "Pod",
-					Namespace: ns,
-					Name:      readyPod.Name,
-					UID:       readyPod.UID,
-				},
-			},
-			terminatingGateEnabled: true,
 		},
 	}
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.EndpointSliceTerminatingCondition, testCase.terminatingGateEnabled)()
-
 			endpoint := podToEndpoint(testCase.pod, testCase.node, testCase.svc, discovery.AddressTypeIPv4)
 			if !reflect.DeepEqual(testCase.expectedEndpoint, endpoint) {
 				t.Errorf("Expected endpoint: %+v, got: %+v", testCase.expectedEndpoint, endpoint)
@@ -544,9 +525,9 @@ func TestGetEndpointPorts(t *testing.T) {
 					Ports: []v1.ServicePort{{
 						Name:        "http",
 						Port:        80,
-						TargetPort:  intstr.FromInt(80),
+						TargetPort:  intstr.FromInt32(80),
 						Protocol:    protoTCP,
-						AppProtocol: utilpointer.StringPtr("example.com/custom-protocol"),
+						AppProtocol: pointer.String("example.com/custom-protocol"),
 					}},
 				},
 			},
@@ -558,10 +539,10 @@ func TestGetEndpointPorts(t *testing.T) {
 				},
 			},
 			expectedPorts: []*discovery.EndpointPort{{
-				Name:        utilpointer.StringPtr("http"),
-				Port:        utilpointer.Int32Ptr(80),
+				Name:        pointer.String("http"),
+				Port:        pointer.Int32(80),
 				Protocol:    &protoTCP,
-				AppProtocol: utilpointer.StringPtr("example.com/custom-protocol"),
+				AppProtocol: pointer.String("example.com/custom-protocol"),
 			}},
 		},
 		"service with named port and AppProtocol on one port": {
@@ -570,13 +551,13 @@ func TestGetEndpointPorts(t *testing.T) {
 					Ports: []v1.ServicePort{{
 						Name:       "http",
 						Port:       80,
-						TargetPort: intstr.FromInt(80),
+						TargetPort: intstr.FromInt32(80),
 						Protocol:   protoTCP,
 					}, {
 						Name:        "https",
 						Protocol:    protoTCP,
 						TargetPort:  intstr.FromString("https"),
-						AppProtocol: utilpointer.StringPtr("https"),
+						AppProtocol: pointer.String("https"),
 					}},
 				},
 			},
@@ -592,14 +573,14 @@ func TestGetEndpointPorts(t *testing.T) {
 				},
 			},
 			expectedPorts: []*discovery.EndpointPort{{
-				Name:     utilpointer.StringPtr("http"),
-				Port:     utilpointer.Int32Ptr(80),
+				Name:     pointer.String("http"),
+				Port:     pointer.Int32(80),
 				Protocol: &protoTCP,
 			}, {
-				Name:        utilpointer.StringPtr("https"),
-				Port:        utilpointer.Int32Ptr(443),
+				Name:        pointer.String("https"),
+				Port:        pointer.Int32(443),
 				Protocol:    &protoTCP,
-				AppProtocol: utilpointer.StringPtr("https"),
+				AppProtocol: pointer.String("https"),
 			}},
 		},
 	}
@@ -1000,8 +981,8 @@ func newServiceAndEndpointMeta(name, namespace string) (v1.Service, endpointMeta
 	addressType := discovery.AddressTypeIPv4
 	protocol := v1.ProtocolTCP
 	endpointMeta := endpointMeta{
-		AddressType: addressType,
-		Ports:       []discovery.EndpointPort{{Name: &name, Port: &portNum, Protocol: &protocol}},
+		addressType: addressType,
+		ports:       []discovery.EndpointPort{{Name: &name, Port: &portNum, Protocol: &protocol}},
 	}
 
 	return svc, endpointMeta
@@ -1017,8 +998,8 @@ func newEmptyEndpointSlice(n int, namespace string, endpointMeta endpointMeta, s
 			Namespace:       namespace,
 			OwnerReferences: []metav1.OwnerReference{*ownerRef},
 		},
-		Ports:       endpointMeta.Ports,
-		AddressType: endpointMeta.AddressType,
+		Ports:       endpointMeta.ports,
+		AddressType: endpointMeta.addressType,
 		Endpoints:   []discovery.Endpoint{},
 	}
 }
@@ -1168,24 +1149,72 @@ func Test_hintsEnabled(t *testing.T) {
 		annotations:   map[string]string{"topology-hints": "enabled"},
 		expectEnabled: false,
 	}, {
-		name:          "annotation == enabled",
-		annotations:   map[string]string{v1.AnnotationTopologyAwareHints: "enabled"},
+		name:          "hints annotation == enabled",
+		annotations:   map[string]string{v1.DeprecatedAnnotationTopologyAwareHints: "enabled"},
 		expectEnabled: false,
 	}, {
-		name:          "annotation == aUto",
-		annotations:   map[string]string{v1.AnnotationTopologyAwareHints: "aUto"},
+		name:          "hints annotation == aUto",
+		annotations:   map[string]string{v1.DeprecatedAnnotationTopologyAwareHints: "aUto"},
 		expectEnabled: false,
 	}, {
-		name:          "annotation == auto",
-		annotations:   map[string]string{v1.AnnotationTopologyAwareHints: "auto"},
+		name:          "hints annotation == auto",
+		annotations:   map[string]string{v1.DeprecatedAnnotationTopologyAwareHints: "auto"},
 		expectEnabled: true,
 	}, {
-		name:          "annotation == Auto",
-		annotations:   map[string]string{v1.AnnotationTopologyAwareHints: "Auto"},
+		name:          "hints annotation == Auto",
+		annotations:   map[string]string{v1.DeprecatedAnnotationTopologyAwareHints: "Auto"},
 		expectEnabled: true,
 	}, {
-		name:          "annotation == disabled",
-		annotations:   map[string]string{v1.AnnotationTopologyAwareHints: "disabled"},
+		name:          "hints annotation == disabled",
+		annotations:   map[string]string{v1.DeprecatedAnnotationTopologyAwareHints: "disabled"},
+		expectEnabled: false,
+	}, {
+		name:          "mode annotation == enabled",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "enabled"},
+		expectEnabled: false,
+	}, {
+		name:          "mode annotation == aUto",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "aUto"},
+		expectEnabled: false,
+	}, {
+		name:          "mode annotation == auto",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "auto"},
+		expectEnabled: true,
+	}, {
+		name:          "mode annotation == Auto",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "Auto"},
+		expectEnabled: true,
+	}, {
+		name:          "mode annotation == disabled",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "disabled"},
+		expectEnabled: false,
+	}, {
+		name:          "mode annotation == enabled",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "enabled"},
+		expectEnabled: false,
+	}, {
+		name:          "mode annotation == aUto",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "aUto"},
+		expectEnabled: false,
+	}, {
+		name:          "mode annotation == auto",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "auto"},
+		expectEnabled: true,
+	}, {
+		name:          "mode annotation == Auto",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "Auto"},
+		expectEnabled: true,
+	}, {
+		name:          "mode annotation == disabled",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "disabled"},
+		expectEnabled: false,
+	}, {
+		name:          "mode annotation == disabled, hints annotation == auto",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "disabled", v1.DeprecatedAnnotationTopologyAwareHints: "auto"},
+		expectEnabled: true,
+	}, {
+		name:          "mode annotation == auto, hints annotation == disabled",
+		annotations:   map[string]string{v1.AnnotationTopologyMode: "auto", v1.DeprecatedAnnotationTopologyAwareHints: "disabled"},
 		expectEnabled: false,
 	}}
 	for _, tc := range testCases {

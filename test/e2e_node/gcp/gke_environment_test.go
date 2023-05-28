@@ -18,13 +18,14 @@ package gcp
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 
-	"github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo/v2"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 )
@@ -111,7 +112,7 @@ var _ = SIGDescribe("GKE system requirements [NodeConformance][Feature:GKEEnv][N
 		e2eskipper.RunIfSystemSpecNameIs("gke")
 	})
 
-	ginkgo.It("The required processes should be running", func() {
+	ginkgo.It("The required processes should be running", func(ctx context.Context) {
 		cmdToProcessMap, err := getCmdToProcessMap()
 		framework.ExpectNoError(err)
 		for _, p := range []struct {
@@ -125,10 +126,10 @@ var _ = SIGDescribe("GKE system requirements [NodeConformance][Feature:GKEEnv][N
 			framework.ExpectNoError(checkProcess(p.cmd, p.ppid, cmdToProcessMap))
 		}
 	})
-	ginkgo.It("The iptable rules should work (required by kube-proxy)", func() {
+	ginkgo.It("The iptable rules should work (required by kube-proxy)", func(ctx context.Context) {
 		framework.ExpectNoError(checkIPTables())
 	})
-	ginkgo.It("The GCR is accessible", func() {
+	ginkgo.It("The GCR is accessible", func(ctx context.Context) {
 		framework.ExpectNoError(checkPublicGCR())
 	})
 })

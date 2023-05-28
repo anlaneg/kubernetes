@@ -17,7 +17,6 @@ limitations under the License.
 package scoring
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -31,7 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
-	"k8s.io/kube-scheduler/config/v1beta3"
+	configv1 "k8s.io/kube-scheduler/config/v1"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/scheduler"
 	configtesting "k8s.io/kubernetes/pkg/scheduler/apis/config/testing"
@@ -74,15 +73,15 @@ const (
 
 // This file tests the scheduler priority functions.
 func initTestSchedulerForPriorityTest(t *testing.T, scorePluginName string) *testutils.TestContext {
-	cfg := configtesting.V1beta3ToInternalWithDefaults(t, v1beta3.KubeSchedulerConfiguration{
-		Profiles: []v1beta3.KubeSchedulerProfile{{
-			SchedulerName: pointer.StringPtr(v1.DefaultSchedulerName),
-			Plugins: &v1beta3.Plugins{
-				Score: v1beta3.PluginSet{
-					Enabled: []v1beta3.Plugin{
-						{Name: scorePluginName, Weight: pointer.Int32Ptr(1)},
+	cfg := configtesting.V1ToInternalWithDefaults(t, configv1.KubeSchedulerConfiguration{
+		Profiles: []configv1.KubeSchedulerProfile{{
+			SchedulerName: pointer.String(v1.DefaultSchedulerName),
+			Plugins: &configv1.Plugins{
+				Score: configv1.PluginSet{
+					Enabled: []configv1.Plugin{
+						{Name: scorePluginName, Weight: pointer.Int32(1)},
 					},
-					Disabled: []v1beta3.Plugin{
+					Disabled: []configv1.Plugin{
 						{Name: "*"},
 					},
 				},
@@ -95,26 +94,26 @@ func initTestSchedulerForPriorityTest(t *testing.T, scorePluginName string) *tes
 		0,
 		scheduler.WithProfiles(cfg.Profiles...),
 	)
-	testutils.SyncInformerFactory(testCtx)
+	testutils.SyncSchedulerInformerFactory(testCtx)
 	go testCtx.Scheduler.Run(testCtx.Ctx)
 	return testCtx
 }
 
 func initTestSchedulerForNodeResourcesTest(t *testing.T) *testutils.TestContext {
-	cfg := configtesting.V1beta3ToInternalWithDefaults(t, v1beta3.KubeSchedulerConfiguration{
-		Profiles: []v1beta3.KubeSchedulerProfile{
+	cfg := configtesting.V1ToInternalWithDefaults(t, configv1.KubeSchedulerConfiguration{
+		Profiles: []configv1.KubeSchedulerProfile{
 			{
-				SchedulerName: pointer.StringPtr(v1.DefaultSchedulerName),
+				SchedulerName: pointer.String(v1.DefaultSchedulerName),
 			},
 			{
-				SchedulerName: pointer.StringPtr("gpu-binpacking-scheduler"),
-				PluginConfig: []v1beta3.PluginConfig{
+				SchedulerName: pointer.String("gpu-binpacking-scheduler"),
+				PluginConfig: []configv1.PluginConfig{
 					{
 						Name: noderesources.Name,
-						Args: runtime.RawExtension{Object: &v1beta3.NodeResourcesFitArgs{
-							ScoringStrategy: &v1beta3.ScoringStrategy{
-								Type: v1beta3.MostAllocated,
-								Resources: []v1beta3.ResourceSpec{
+						Args: runtime.RawExtension{Object: &configv1.NodeResourcesFitArgs{
+							ScoringStrategy: &configv1.ScoringStrategy{
+								Type: configv1.MostAllocated,
+								Resources: []configv1.ResourceSpec{
 									{Name: string(v1.ResourceCPU), Weight: 1},
 									{Name: string(v1.ResourceMemory), Weight: 1},
 									{Name: resourceGPU, Weight: 2}},
@@ -131,7 +130,7 @@ func initTestSchedulerForNodeResourcesTest(t *testing.T) *testutils.TestContext 
 		0,
 		scheduler.WithProfiles(cfg.Profiles...),
 	)
-	testutils.SyncInformerFactory(testCtx)
+	testutils.SyncSchedulerInformerFactory(testCtx)
 	go testCtx.Scheduler.Run(testCtx.Ctx)
 	return testCtx
 }
@@ -140,7 +139,6 @@ func initTestSchedulerForNodeResourcesTest(t *testing.T) *testutils.TestContext 
 // works correctly.
 func TestNodeResourcesScoring(t *testing.T) {
 	testCtx := initTestSchedulerForNodeResourcesTest(t)
-	defer testutils.CleanupTest(t, testCtx)
 	// Add a few nodes.
 	_, err := createAndWaitForNodesInCache(testCtx, "testnode", st.MakeNode().Capacity(
 		map[v1.ResourceName]string{
@@ -151,7 +149,7 @@ func TestNodeResourcesScoring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cpuBoundPod1, err := runPausePod(testCtx.ClientSet, st.MakePod().Namespace(testCtx.NS.Name).Name("cpubound1").Req(
+	cpuBoundPod1, err := runPausePod(testCtx.ClientSet, st.MakePod().Namespace(testCtx.NS.Name).Name("cpubound1").Res(
 		map[v1.ResourceName]string{
 			v1.ResourceCPU:    "2",
 			v1.ResourceMemory: "4G",
@@ -161,7 +159,7 @@ func TestNodeResourcesScoring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gpuBoundPod1, err := runPausePod(testCtx.ClientSet, st.MakePod().Namespace(testCtx.NS.Name).Name("gpubound1").Req(
+	gpuBoundPod1, err := runPausePod(testCtx.ClientSet, st.MakePod().Namespace(testCtx.NS.Name).Name("gpubound1").Res(
 		map[v1.ResourceName]string{
 			v1.ResourceCPU:    "1",
 			v1.ResourceMemory: "2G",
@@ -185,7 +183,7 @@ func TestNodeResourcesScoring(t *testing.T) {
 
 	// The following pod is using the gpu-binpacking-scheduler profile, which gives a higher weight to
 	// GPU-based binpacking, and so it should land on the node with higher GPU utilization.
-	cpuBoundPod2, err := runPausePod(testCtx.ClientSet, st.MakePod().Namespace(testCtx.NS.Name).Name("cpubound2").SchedulerName("gpu-binpacking-scheduler").Req(
+	cpuBoundPod2, err := runPausePod(testCtx.ClientSet, st.MakePod().Namespace(testCtx.NS.Name).Name("cpubound2").SchedulerName("gpu-binpacking-scheduler").Res(
 		map[v1.ResourceName]string{
 			v1.ResourceCPU:    "2",
 			v1.ResourceMemory: "4G",
@@ -204,7 +202,6 @@ func TestNodeResourcesScoring(t *testing.T) {
 // works correctly.
 func TestNodeAffinityScoring(t *testing.T) {
 	testCtx := initTestSchedulerForPriorityTest(t, nodeaffinity.Name)
-	defer testutils.CleanupTest(t, testCtx)
 	// Add a few nodes.
 	_, err := createAndWaitForNodesInCache(testCtx, "testnode", st.MakeNode(), 4)
 	if err != nil {
@@ -324,7 +321,6 @@ func TestPodAffinityScoring(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			testCtx := initTestSchedulerForPriorityTest(t, interpodaffinity.Name)
-			defer testutils.CleanupTest(t, testCtx)
 			// Add a few nodes.
 			nodesInTopology, err := createAndWaitForNodesInCache(testCtx, "in-topology", st.MakeNode().Label(topologyKey, topologyValue), 5)
 			if err != nil {
@@ -369,7 +365,6 @@ func TestPodAffinityScoring(t *testing.T) {
 // works correctly, i.e., the pod gets scheduled to the node where its container images are ready.
 func TestImageLocalityScoring(t *testing.T) {
 	testCtx := initTestSchedulerForPriorityTest(t, imagelocality.Name)
-	defer testutils.CleanupTest(t, testCtx)
 
 	// Create a node with the large image.
 	// We use a fake large image as the test image used by the pod, which has
@@ -442,20 +437,21 @@ func TestPodTopologySpreadScoring(t *testing.T) {
 	}
 
 	tests := []struct {
-		name                       string
-		incomingPod                *v1.Pod
-		existingPods               []*v1.Pod
-		fits                       bool
-		nodes                      []*v1.Node
-		want                       []string // nodes expected to schedule onto
-		enableNodeInclustionPolicy bool
+		name                      string
+		incomingPod               *v1.Pod
+		existingPods              []*v1.Pod
+		fits                      bool
+		nodes                     []*v1.Node
+		want                      []string // nodes expected to schedule onto
+		enableNodeInclusionPolicy bool
+		enableMatchLabelKeys      bool
 	}{
 		// note: naming starts at index 0
 		// the symbol ~X~ means that node is infeasible
 		{
 			name: "place pod on a ~0~/1/2/3 cluster with MaxSkew=1, node-1 is the preferred fit",
 			incomingPod: st.MakePod().Name("p").Label("foo", "").Container(pause).
-				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil).
+				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil, nil).
 				Obj(),
 			existingPods: []*v1.Pod{
 				st.MakePod().Name("p1").Node("node-1").Label("foo", "").Container(pause).Obj(),
@@ -472,8 +468,8 @@ func TestPodTopologySpreadScoring(t *testing.T) {
 		{
 			name: "combined with hardSpread constraint on a ~4~/0/1/2 cluster",
 			incomingPod: st.MakePod().Name("p").Label("foo", "").Container(pause).
-				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil).
-				SpreadConstraint(1, "zone", hardSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil).
+				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil, nil).
+				SpreadConstraint(1, "zone", hardSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil, nil).
 				Obj(),
 			existingPods: []*v1.Pod{
 				st.MakePod().Name("p0a").Node("node-0").Label("foo", "").Container(pause).Obj(),
@@ -495,8 +491,8 @@ func TestPodTopologySpreadScoring(t *testing.T) {
 			name: "soft constraint with two node inclusion Constraints, zone: honor/ignore, node: honor/ignore",
 			incomingPod: st.MakePod().Name("p").Label("foo", "").Container(pause).
 				NodeSelector(map[string]string{"foo": ""}).
-				SpreadConstraint(1, "zone", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil).
-				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil).
+				SpreadConstraint(1, "zone", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil, nil).
+				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil, nil).
 				Obj(),
 			existingPods: []*v1.Pod{
 				st.MakePod().Name("p1a").Node("node-1").Label("foo", "").Container(pause).Obj(),
@@ -511,8 +507,8 @@ func TestPodTopologySpreadScoring(t *testing.T) {
 				st.MakeNode().Name("node-3").Label("node", "node-3").Label("zone", "zone-2").Label("foo", "").Obj(),
 				st.MakeNode().Name("node-4").Label("node", "node-4").Label("zone", "zone-2").Obj(),
 			},
-			want:                       []string{"node-3"},
-			enableNodeInclustionPolicy: true,
+			want:                      []string{"node-3"},
+			enableNodeInclusionPolicy: true,
 		},
 		{
 			// 1. to fulfil "zone" constraint, pods spread across zones as ~3~/~1~
@@ -521,8 +517,8 @@ func TestPodTopologySpreadScoring(t *testing.T) {
 			name: "soft constraint with two node inclusion Constraints, zone: ignore/ignore, node: honor/honor",
 			incomingPod: st.MakePod().Name("p").Label("foo", "").Container(pause).
 				NodeSelector(map[string]string{"foo": ""}).
-				SpreadConstraint(1, "zone", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, &ignorePolicy, nil).
-				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, &honorPolicy).
+				SpreadConstraint(1, "zone", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, &ignorePolicy, nil, nil).
+				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, &honorPolicy, nil).
 				Obj(),
 			existingPods: []*v1.Pod{
 				st.MakePod().Name("p1a").Node("node-1").Label("foo", "").Container(pause).Obj(),
@@ -537,16 +533,70 @@ func TestPodTopologySpreadScoring(t *testing.T) {
 				st.MakeNode().Name("node-3").Label("node", "node-3").Label("zone", "zone-2").Label("foo", "").Obj(),
 				st.MakeNode().Name("node-4").Label("node", "node-4").Label("zone", "zone-2").Obj(),
 			},
-			want:                       []string{"node-3"},
-			enableNodeInclustionPolicy: true,
+			want:                      []string{"node-3"},
+			enableNodeInclusionPolicy: true,
+		},
+		{
+			name: "matchLabelKeys ignored when feature gate disabled, node-1 is the preferred fit",
+			incomingPod: st.MakePod().Name("p").Label("foo", "").Label("bar", "").Container(pause).
+				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil, []string{"bar"}).
+				Obj(),
+			existingPods: []*v1.Pod{
+				st.MakePod().Name("p1").Node("node-1").Label("foo", "").Label("bar", "").Container(pause).Obj(),
+				st.MakePod().Name("p2a").Node("node-2").Label("foo", "").Container(pause).Obj(),
+				st.MakePod().Name("p2b").Node("node-2").Label("foo", "").Container(pause).Obj(),
+				st.MakePod().Name("p3a").Node("node-3").Label("foo", "").Label("bar", "").Container(pause).Obj(),
+				st.MakePod().Name("p3b").Node("node-3").Label("foo", "").Label("bar", "").Container(pause).Obj(),
+				st.MakePod().Name("p3c").Node("node-3").Label("foo", "").Container(pause).Obj(),
+			},
+			fits:                 true,
+			nodes:                defaultNodes,
+			want:                 []string{"node-1"},
+			enableMatchLabelKeys: false,
+		},
+		{
+			name: "matchLabelKeys ANDed with LabelSelector when LabelSelector isn't empty, node-2 is the preferred fit",
+			incomingPod: st.MakePod().Name("p").Label("foo", "").Label("bar", "").Container(pause).
+				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Exists("foo").Obj(), nil, nil, nil, []string{"bar"}).
+				Obj(),
+			existingPods: []*v1.Pod{
+				st.MakePod().Name("p1").Node("node-1").Label("foo", "").Label("bar", "").Container(pause).Obj(),
+				st.MakePod().Name("p2a").Node("node-2").Label("foo", "").Container(pause).Obj(),
+				st.MakePod().Name("p2b").Node("node-2").Label("foo", "").Container(pause).Obj(),
+				st.MakePod().Name("p3a").Node("node-3").Label("foo", "").Label("bar", "").Container(pause).Obj(),
+				st.MakePod().Name("p3b").Node("node-3").Label("foo", "").Label("bar", "").Container(pause).Obj(),
+				st.MakePod().Name("p3c").Node("node-3").Label("foo", "").Container(pause).Obj(),
+			},
+			fits:                 true,
+			nodes:                defaultNodes,
+			want:                 []string{"node-2"},
+			enableMatchLabelKeys: true,
+		},
+		{
+			name: "matchLabelKeys ANDed with LabelSelector when LabelSelector is empty, node-1 is the preferred fit",
+			incomingPod: st.MakePod().Name("p").Label("foo", "").Container(pause).
+				SpreadConstraint(1, "node", softSpread, st.MakeLabelSelector().Obj(), nil, nil, nil, []string{"foo"}).
+				Obj(),
+			existingPods: []*v1.Pod{
+				st.MakePod().Name("p1").Node("node-1").Label("foo", "").Container(pause).Obj(),
+				st.MakePod().Name("p2a").Node("node-2").Label("foo", "").Container(pause).Obj(),
+				st.MakePod().Name("p2b").Node("node-2").Label("foo", "").Container(pause).Obj(),
+				st.MakePod().Name("p3a").Node("node-3").Label("foo", "").Container(pause).Obj(),
+				st.MakePod().Name("p3b").Node("node-3").Label("foo", "").Container(pause).Obj(),
+				st.MakePod().Name("p3c").Node("node-3").Label("foo", "").Container(pause).Obj(),
+			},
+			fits:                 true,
+			nodes:                defaultNodes,
+			want:                 []string{"node-1"},
+			enableMatchLabelKeys: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.NodeInclusionPolicyInPodTopologySpread, tt.enableNodeInclustionPolicy)()
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.NodeInclusionPolicyInPodTopologySpread, tt.enableNodeInclusionPolicy)()
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.MatchLabelKeysInPodTopologySpread, tt.enableMatchLabelKeys)()
 
 			testCtx := initTestSchedulerForPriorityTest(t, podtopologyspread.Name)
-			defer testutils.CleanupTest(t, testCtx)
 			cs := testCtx.ClientSet
 			ns := testCtx.NS.Name
 
@@ -563,9 +613,9 @@ func TestPodTopologySpreadScoring(t *testing.T) {
 			tt.incomingPod.SetNamespace(ns)
 
 			allPods := append(tt.existingPods, tt.incomingPod)
-			defer testutils.CleanupPods(cs, t, allPods)
+			defer testutils.CleanupPods(testCtx.Ctx, cs, t, allPods)
 			for _, pod := range tt.existingPods {
-				createdPod, err := cs.CoreV1().Pods(pod.Namespace).Create(context.TODO(), pod, metav1.CreateOptions{})
+				createdPod, err := cs.CoreV1().Pods(pod.Namespace).Create(testCtx.Ctx, pod, metav1.CreateOptions{})
 				if err != nil {
 					t.Fatalf("Test Failed: error while creating pod during test: %v", err)
 				}
@@ -575,7 +625,7 @@ func TestPodTopologySpreadScoring(t *testing.T) {
 				}
 			}
 
-			testPod, err := cs.CoreV1().Pods(tt.incomingPod.Namespace).Create(context.TODO(), tt.incomingPod, metav1.CreateOptions{})
+			testPod, err := cs.CoreV1().Pods(tt.incomingPod.Namespace).Create(testCtx.Ctx, tt.incomingPod, metav1.CreateOptions{})
 			if err != nil && !apierrors.IsInvalid(err) {
 				t.Fatalf("Test Failed: error while creating pod during test: %v", err)
 			}
@@ -597,9 +647,6 @@ func TestPodTopologySpreadScoring(t *testing.T) {
 // The setup has 300 nodes over 3 zones.
 func TestDefaultPodTopologySpreadScoring(t *testing.T) {
 	testCtx := initTestSchedulerForPriorityTest(t, podtopologyspread.Name)
-	t.Cleanup(func() {
-		testutils.CleanupTest(t, testCtx)
-	})
 	cs := testCtx.ClientSet
 	ns := testCtx.NS.Name
 

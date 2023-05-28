@@ -19,11 +19,7 @@ package app
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -31,58 +27,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	utilpointer "k8s.io/utils/pointer"
+	"k8s.io/utils/pointer"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	componentbaseconfig "k8s.io/component-base/config"
 	kubeproxyconfig "k8s.io/kubernetes/pkg/proxy/apis/config"
 )
-
-func TestGetConntrackMax(t *testing.T) {
-	ncores := runtime.NumCPU()
-	testCases := []struct {
-		min        int32
-		maxPerCore int32
-		expected   int
-		err        string
-	}{
-		{
-			expected: 0,
-		},
-		{
-			maxPerCore: 67890, // use this if Max is 0
-			min:        1,     // avoid 0 default
-			expected:   67890 * ncores,
-		},
-		{
-			maxPerCore: 1, // ensure that Min is considered
-			min:        123456,
-			expected:   123456,
-		},
-		{
-			maxPerCore: 0, // leave system setting
-			min:        123456,
-			expected:   0,
-		},
-	}
-
-	for i, tc := range testCases {
-		cfg := kubeproxyconfig.KubeProxyConntrackConfiguration{
-			Min:        utilpointer.Int32Ptr(tc.min),
-			MaxPerCore: utilpointer.Int32Ptr(tc.maxPerCore),
-		}
-		x, e := getConntrackMax(cfg)
-		if e != nil {
-			if tc.err == "" {
-				t.Errorf("[%d] unexpected error: %v", i, e)
-			} else if !strings.Contains(e.Error(), tc.err) {
-				t.Errorf("[%d] expected an error containing %q: %v", i, tc.err, e)
-			}
-		} else if x != tc.expected {
-			t.Errorf("[%d] expected %d, got %d", i, tc.expected, x)
-		}
-	}
-}
 
 // TestLoadConfig tests proper operation of loadConfig()
 func TestLoadConfig(t *testing.T) {
@@ -109,6 +59,7 @@ iptables:
   masqueradeBit: 17
   minSyncPeriod: 10s
   syncPeriod: 60s
+  localhostNodePorts: true
 ipvs:
   minSyncPeriod: 10s
   syncPeriod: 60s
@@ -120,7 +71,6 @@ metricsBindAddress: "%s"
 mode: "%s"
 oomScoreAdj: 17
 portRange: "2-7"
-udpIdleTimeout: 123ms
 detectLocalMode: "ClusterCIDR"
 detectLocal:
   bridgeInterface: "cbr0"
@@ -240,8 +190,8 @@ nodePortAddresses:
 			ClusterCIDR:      tc.clusterCIDR,
 			ConfigSyncPeriod: metav1.Duration{Duration: 15 * time.Second},
 			Conntrack: kubeproxyconfig.KubeProxyConntrackConfiguration{
-				MaxPerCore:            utilpointer.Int32Ptr(2),
-				Min:                   utilpointer.Int32Ptr(1),
+				MaxPerCore:            pointer.Int32(2),
+				Min:                   pointer.Int32(1),
 				TCPCloseWaitTimeout:   &metav1.Duration{Duration: 10 * time.Second},
 				TCPEstablishedTimeout: &metav1.Duration{Duration: 20 * time.Second},
 			},
@@ -249,10 +199,11 @@ nodePortAddresses:
 			HealthzBindAddress: tc.healthzBindAddress,
 			HostnameOverride:   "foo",
 			IPTables: kubeproxyconfig.KubeProxyIPTablesConfiguration{
-				MasqueradeAll: true,
-				MasqueradeBit: utilpointer.Int32Ptr(17),
-				MinSyncPeriod: metav1.Duration{Duration: 10 * time.Second},
-				SyncPeriod:    metav1.Duration{Duration: 60 * time.Second},
+				MasqueradeAll:      true,
+				MasqueradeBit:      pointer.Int32(17),
+				LocalhostNodePorts: pointer.Bool(true),
+				MinSyncPeriod:      metav1.Duration{Duration: 10 * time.Second},
+				SyncPeriod:         metav1.Duration{Duration: 60 * time.Second},
 			},
 			IPVS: kubeproxyconfig.KubeProxyIPVSConfiguration{
 				MinSyncPeriod: metav1.Duration{Duration: 10 * time.Second},
@@ -261,9 +212,8 @@ nodePortAddresses:
 			},
 			MetricsBindAddress: tc.metricsBindAddress,
 			Mode:               kubeproxyconfig.ProxyMode(tc.mode),
-			OOMScoreAdj:        utilpointer.Int32Ptr(17),
+			OOMScoreAdj:        pointer.Int32(17),
 			PortRange:          "2-7",
-			UDPIdleTimeout:     metav1.Duration{Duration: 123 * time.Millisecond},
 			NodePortAddresses:  []string{"10.20.30.40/16", "fd00:1::0/64"},
 			DetectLocalMode:    kubeproxyconfig.LocalModeClusterCIDR,
 			DetectLocal: kubeproxyconfig.DetectLocalConfiguration{
@@ -407,123 +357,6 @@ func TestProcessHostnameOverrideFlag(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestConfigChange(t *testing.T) {
-	setUp := func() (*os.File, string, error) {
-		tempDir, err := os.MkdirTemp("", "kubeproxy-config-change")
-		if err != nil {
-			return nil, "", fmt.Errorf("unable to create temporary directory: %v", err)
-		}
-		fullPath := filepath.Join(tempDir, "kube-proxy-config")
-		file, err := os.Create(fullPath)
-		if err != nil {
-			return nil, "", fmt.Errorf("unexpected error when creating temp file: %v", err)
-		}
-
-		_, err = file.WriteString(`apiVersion: kubeproxy.config.k8s.io/v1alpha1
-bindAddress: 0.0.0.0
-bindAddressHardFail: false
-clientConnection:
-  acceptContentTypes: ""
-  burst: 10
-  contentType: application/vnd.kubernetes.protobuf
-  kubeconfig: /var/lib/kube-proxy/kubeconfig.conf
-  qps: 5
-clusterCIDR: 10.244.0.0/16
-configSyncPeriod: 15m0s
-conntrack:
-  maxPerCore: 32768
-  min: 131072
-  tcpCloseWaitTimeout: 1h0m0s
-  tcpEstablishedTimeout: 24h0m0s
-enableProfiling: false
-healthzBindAddress: 0.0.0.0:10256
-hostnameOverride: ""
-iptables:
-  masqueradeAll: false
-  masqueradeBit: 14
-  minSyncPeriod: 0s
-  syncPeriod: 30s
-ipvs:
-  excludeCIDRs: null
-  minSyncPeriod: 0s
-  scheduler: ""
-  syncPeriod: 30s
-kind: KubeProxyConfiguration
-metricsBindAddress: 127.0.0.1:10249
-mode: ""
-nodePortAddresses: null
-oomScoreAdj: -999
-portRange: ""
-detectLocalMode: "BridgeInterface"
-udpIdleTimeout: 250ms`)
-		if err != nil {
-			return nil, "", fmt.Errorf("unexpected error when writing content to temp kube-proxy config file: %v", err)
-		}
-
-		return file, tempDir, nil
-	}
-
-	tearDown := func(file *os.File, tempDir string) {
-		file.Close()
-		os.RemoveAll(tempDir)
-	}
-
-	testCases := []struct {
-		name        string
-		proxyServer proxyRun
-		append      bool
-		expectedErr string
-	}{
-		{
-			name:        "update config file",
-			proxyServer: new(fakeProxyServerLongRun),
-			append:      true,
-			expectedErr: "content of the proxy server's configuration file was updated",
-		},
-		{
-			name:        "fake error",
-			proxyServer: new(fakeProxyServerError),
-			expectedErr: "mocking error from ProxyServer.Run()",
-		},
-	}
-
-	for _, tc := range testCases {
-		file, tempDir, err := setUp()
-		if err != nil {
-			t.Fatalf("unexpected error when setting up environment: %v", err)
-		}
-
-		opt := NewOptions()
-		opt.ConfigFile = file.Name()
-		err = opt.Complete()
-		if err != nil {
-			t.Fatal(err)
-		}
-		opt.proxyServer = tc.proxyServer
-
-		errCh := make(chan error, 1)
-		go func() {
-			errCh <- opt.runLoop()
-		}()
-
-		if tc.append {
-			file.WriteString("append fake content")
-		}
-
-		select {
-		case err := <-errCh:
-			if err != nil {
-				if !strings.Contains(err.Error(), tc.expectedErr) {
-					t.Errorf("[%s] Expected error containing %v, got %v", tc.name, tc.expectedErr, err)
-				}
-			}
-		case <-time.After(10 * time.Second):
-			t.Errorf("[%s] Timeout: unable to get any events or internal timeout.", tc.name)
-		}
-		tearDown(file, tempDir)
 	}
 }
 

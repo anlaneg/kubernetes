@@ -25,10 +25,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/diff"
 	"k8s.io/apiserver/pkg/admission"
 	admissiontesting "k8s.io/apiserver/pkg/admission/testing"
 	"k8s.io/client-go/informers"
@@ -177,9 +175,9 @@ func TestAssignsDefaultServiceAccountAndBoundTokenWithNoSecretTokens(t *testing.
 		},
 	})
 
-	v1PodIn := &v1.Pod{
-		Spec: v1.PodSpec{
-			Containers: []v1.Container{{}},
+	v1PodIn := &corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{}},
 		},
 	}
 	v1defaults.SetObjectDefaults_Pod(v1PodIn)
@@ -225,14 +223,14 @@ func TestAssignsDefaultServiceAccountAndBoundTokenWithNoSecretTokens(t *testing.
 	}
 
 	if !reflect.DeepEqual(expectedVolumes, pod.Spec.Volumes) {
-		t.Errorf("unexpected volumes: %s", diff.ObjectReflectDiff(expectedVolumes, pod.Spec.Volumes))
+		t.Errorf("unexpected volumes: %s", cmp.Diff(expectedVolumes, pod.Spec.Volumes))
 	}
 	if !reflect.DeepEqual(expectedVolumeMounts, pod.Spec.Containers[0].VolumeMounts) {
-		t.Errorf("unexpected volumes: %s", diff.ObjectReflectDiff(expectedVolumeMounts, pod.Spec.Containers[0].VolumeMounts))
+		t.Errorf("unexpected volumes: %s", cmp.Diff(expectedVolumeMounts, pod.Spec.Containers[0].VolumeMounts))
 	}
 
 	// ensure result converted to v1 matches defaulted object
-	v1PodOut := &v1.Pod{}
+	v1PodOut := &corev1.Pod{}
 	if err := v1defaults.Convert_core_Pod_To_v1_Pod(pod, v1PodOut, nil); err != nil {
 		t.Fatal(err)
 	}

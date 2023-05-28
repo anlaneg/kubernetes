@@ -18,14 +18,14 @@ package state
 
 import (
 	"fmt"
-	"path"
+	"path/filepath"
 	"sync"
 
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager/errors"
 	"k8s.io/kubernetes/pkg/kubelet/cm/containermap"
-	"k8s.io/kubernetes/pkg/kubelet/cm/cpuset"
+	"k8s.io/utils/cpuset"
 )
 
 var _ State = &stateCheckpoint{}
@@ -56,7 +56,7 @@ func NewCheckpointState(stateDir, checkpointName, policyName string, initialCont
 	if err := stateCheckpoint.restoreState(); err != nil {
 		//nolint:staticcheck // ST1005 user-facing error message
 		return nil, fmt.Errorf("could not restore state from checkpoint: %v, please drain this node and delete the CPU manager checkpoint file %q before restarting Kubelet",
-			err, path.Join(stateDir, checkpointName))
+			err, filepath.Join(stateDir, checkpointName))
 	}
 
 	return stateCheckpoint, nil

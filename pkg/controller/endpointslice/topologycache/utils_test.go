@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	discovery "k8s.io/api/discovery/v1"
-	utilpointer "k8s.io/utils/pointer"
+	"k8s.io/utils/pointer"
 )
 
 func Test_redistributeHints(t *testing.T) {
@@ -41,9 +41,9 @@ func Test_redistributeHints(t *testing.T) {
 		name: "single endpoint",
 		slices: []*discovery.EndpointSlice{{
 			Endpoints: []discovery.Endpoint{{
-				Zone:       utilpointer.StringPtr("zone-a"),
+				Zone:       pointer.String("zone-a"),
 				Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+				Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 			}},
 		}},
 		givingZones:             map[string]int{"zone-a": 1},
@@ -53,17 +53,17 @@ func Test_redistributeHints(t *testing.T) {
 		name: "endpoints from 1 zone redistributed to 2 other zones",
 		slices: []*discovery.EndpointSlice{{
 			Endpoints: []discovery.Endpoint{{
-				Zone:       utilpointer.StringPtr("zone-a"),
+				Zone:       pointer.String("zone-a"),
 				Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+				Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 			}, {
-				Zone:       utilpointer.StringPtr("zone-a"),
+				Zone:       pointer.String("zone-a"),
 				Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+				Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 			}, {
-				Zone:       utilpointer.StringPtr("zone-a"),
+				Zone:       pointer.String("zone-a"),
 				Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+				Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 			}},
 		}},
 		givingZones:             map[string]int{"zone-a": 2},
@@ -92,92 +92,92 @@ func Test_redistributeHints(t *testing.T) {
 func Test_getGivingAndReceivingZones(t *testing.T) {
 	testCases := []struct {
 		name                   string
-		allocations            map[string]Allocation
+		allocations            map[string]allocation
 		allocatedHintsByZone   map[string]int
 		expectedGivingZones    map[string]int
 		expectedReceivingZones map[string]int
 	}{{
 		name:                   "empty",
-		allocations:            map[string]Allocation{},
+		allocations:            map[string]allocation{},
 		allocatedHintsByZone:   map[string]int{},
 		expectedGivingZones:    map[string]int{},
 		expectedReceivingZones: map[string]int{},
 	}, {
 		name: "simple allocation with no need for rebalancing",
-		allocations: map[string]Allocation{
-			"zone-a": {Desired: 1.2},
-			"zone-b": {Desired: 1.1},
-			"zone-c": {Desired: 1.0},
+		allocations: map[string]allocation{
+			"zone-a": {desired: 1.2},
+			"zone-b": {desired: 1.1},
+			"zone-c": {desired: 1.0},
 		},
 		allocatedHintsByZone:   map[string]int{"zone-a": 1, "zone-b": 1, "zone-c": 1},
 		expectedGivingZones:    map[string]int{},
 		expectedReceivingZones: map[string]int{},
 	}, {
 		name: "preference for same zone even when giving an extra endpoint would result in slightly better distribution",
-		allocations: map[string]Allocation{
-			"zone-a": {Desired: 5.1},
-			"zone-b": {Desired: 5.1},
-			"zone-c": {Desired: 5.8},
+		allocations: map[string]allocation{
+			"zone-a": {desired: 5.1},
+			"zone-b": {desired: 5.1},
+			"zone-c": {desired: 5.8},
 		},
 		allocatedHintsByZone:   map[string]int{"zone-a": 16},
 		expectedGivingZones:    map[string]int{"zone-a": 10},
 		expectedReceivingZones: map[string]int{"zone-b": 5, "zone-c": 5},
 	}, {
 		name: "when 2 zones need < 1 endpoint, give to zone that needs endpoint most",
-		allocations: map[string]Allocation{
-			"zone-a": {Desired: 5.0},
-			"zone-b": {Desired: 5.6},
-			"zone-c": {Desired: 5.4},
+		allocations: map[string]allocation{
+			"zone-a": {desired: 5.0},
+			"zone-b": {desired: 5.6},
+			"zone-c": {desired: 5.4},
 		},
 		allocatedHintsByZone:   map[string]int{"zone-a": 16},
 		expectedGivingZones:    map[string]int{"zone-a": 11},
 		expectedReceivingZones: map[string]int{"zone-b": 6, "zone-c": 5},
 	}, {
 		name: "when 2 zones have extra endpoints, give from zone with most extra",
-		allocations: map[string]Allocation{
-			"zone-a": {Desired: 5.0},
-			"zone-b": {Desired: 5.6},
-			"zone-c": {Desired: 5.4},
+		allocations: map[string]allocation{
+			"zone-a": {desired: 5.0},
+			"zone-b": {desired: 5.6},
+			"zone-c": {desired: 5.4},
 		},
 		allocatedHintsByZone:   map[string]int{"zone-b": 8, "zone-c": 8},
 		expectedGivingZones:    map[string]int{"zone-b": 2, "zone-c": 3},
 		expectedReceivingZones: map[string]int{"zone-a": 5},
 	}, {
 		name: "ensure function can handle unexpected data (more allocated than allocations)",
-		allocations: map[string]Allocation{
-			"zone-a": {Desired: 5.0},
-			"zone-b": {Desired: 5.0},
-			"zone-c": {Desired: 5.0},
+		allocations: map[string]allocation{
+			"zone-a": {desired: 5.0},
+			"zone-b": {desired: 5.0},
+			"zone-c": {desired: 5.0},
 		},
 		allocatedHintsByZone:   map[string]int{"zone-a": 6, "zone-b": 6, "zone-c": 6},
 		expectedGivingZones:    map[string]int{},
 		expectedReceivingZones: map[string]int{},
 	}, {
 		name: "ensure function can handle unexpected data (negative allocations)",
-		allocations: map[string]Allocation{
-			"zone-a": {Desired: -5.0},
-			"zone-b": {Desired: -5.0},
-			"zone-c": {Desired: -5.0},
+		allocations: map[string]allocation{
+			"zone-a": {desired: -5.0},
+			"zone-b": {desired: -5.0},
+			"zone-c": {desired: -5.0},
 		},
 		allocatedHintsByZone:   map[string]int{"zone-a": 6, "zone-b": 6, "zone-c": 6},
 		expectedGivingZones:    map[string]int{},
 		expectedReceivingZones: map[string]int{},
 	}, {
 		name: "ensure function can handle unexpected data (negative allocated)",
-		allocations: map[string]Allocation{
-			"zone-a": {Desired: 5.0},
-			"zone-b": {Desired: 5.0},
-			"zone-c": {Desired: 5.0},
+		allocations: map[string]allocation{
+			"zone-a": {desired: 5.0},
+			"zone-b": {desired: 5.0},
+			"zone-c": {desired: 5.0},
 		},
 		allocatedHintsByZone:   map[string]int{"zone-a": -4, "zone-b": -3, "zone-c": -2},
 		expectedGivingZones:    map[string]int{},
 		expectedReceivingZones: map[string]int{},
 	}, {
 		name: "ensure function can handle unexpected data (negative for 1 zone)",
-		allocations: map[string]Allocation{
-			"zone-a": {Desired: 5.0},
-			"zone-b": {Desired: 5.0},
-			"zone-c": {Desired: 5.0},
+		allocations: map[string]allocation{
+			"zone-a": {desired: 5.0},
+			"zone-b": {desired: 5.0},
+			"zone-c": {desired: 5.0},
 		},
 		allocatedHintsByZone:   map[string]int{"zone-a": -40, "zone-b": 20, "zone-c": 20},
 		expectedGivingZones:    map[string]int{"zone-b": 15, "zone-c": 15},
@@ -203,25 +203,25 @@ func Test_getHintsByZone(t *testing.T) {
 		name                 string
 		slice                discovery.EndpointSlice
 		allocatedHintsByZone EndpointZoneInfo
-		allocations          map[string]Allocation
+		allocations          map[string]allocation
 		expectedHintsByZone  map[string]int
 	}{{
 		name:                 "empty",
 		slice:                discovery.EndpointSlice{},
-		allocations:          map[string]Allocation{},
+		allocations:          map[string]allocation{},
 		allocatedHintsByZone: EndpointZoneInfo{},
 		expectedHintsByZone:  map[string]int{},
 	}, {
 		name: "single zone hint",
 		slice: discovery.EndpointSlice{
 			Endpoints: []discovery.Endpoint{{
-				Zone:       utilpointer.StringPtr("zone-a"),
+				Zone:       pointer.String("zone-a"),
 				Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+				Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 			}},
 		},
-		allocations: map[string]Allocation{
-			"zone-a": {Maximum: 3},
+		allocations: map[string]allocation{
+			"zone-a": {maximum: 3},
 		},
 		allocatedHintsByZone: EndpointZoneInfo{"zone-a": 1},
 		expectedHintsByZone: map[string]int{
@@ -231,20 +231,20 @@ func Test_getHintsByZone(t *testing.T) {
 		name: "single zone hint with 1 unready endpoint and 1 unknown endpoint",
 		slice: discovery.EndpointSlice{
 			Endpoints: []discovery.Endpoint{{
-				Zone:       utilpointer.StringPtr("zone-a"),
+				Zone:       pointer.String("zone-a"),
 				Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+				Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 			}, {
-				Zone:       utilpointer.StringPtr("zone-a"),
+				Zone:       pointer.String("zone-a"),
 				Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
-				Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(false)},
+				Conditions: discovery.EndpointConditions{Ready: pointer.Bool(false)},
 			}, {
-				Zone:  utilpointer.StringPtr("zone-a"),
+				Zone:  pointer.String("zone-a"),
 				Hints: &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
 			}},
 		},
-		allocations: map[string]Allocation{
-			"zone-a": {Maximum: 3},
+		allocations: map[string]allocation{
+			"zone-a": {maximum: 3},
 		},
 		allocatedHintsByZone: EndpointZoneInfo{"zone-a": 1},
 		expectedHintsByZone: map[string]int{
@@ -255,26 +255,26 @@ func Test_getHintsByZone(t *testing.T) {
 		slice: discovery.EndpointSlice{
 			Endpoints: []discovery.Endpoint{
 				{
-					Zone:       utilpointer.StringPtr("zone-a"),
+					Zone:       pointer.String("zone-a"),
 					Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
-					Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+					Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 				},
 				{
-					Zone:       utilpointer.StringPtr("zone-a"),
+					Zone:       pointer.String("zone-a"),
 					Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-b"}}},
-					Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+					Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 				},
 				{
-					Zone:       utilpointer.StringPtr("zone-b"),
+					Zone:       pointer.String("zone-b"),
 					Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-b"}}},
-					Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+					Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 				},
 			},
 		},
-		allocations: map[string]Allocation{
-			"zone-a": {Maximum: 3},
-			"zone-b": {Maximum: 3},
-			"zone-c": {Maximum: 3},
+		allocations: map[string]allocation{
+			"zone-a": {maximum: 3},
+			"zone-b": {maximum: 3},
+			"zone-c": {maximum: 3},
 		},
 		allocatedHintsByZone: EndpointZoneInfo{"zone-a": 1, "zone-b": 1, "zone-c": 1},
 		expectedHintsByZone: map[string]int{
@@ -286,14 +286,14 @@ func Test_getHintsByZone(t *testing.T) {
 		slice: discovery.EndpointSlice{
 			Endpoints: []discovery.Endpoint{
 				{
-					Zone:       utilpointer.StringPtr("zone-a"),
+					Zone:       pointer.String("zone-a"),
 					Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-non-existent"}}},
-					Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+					Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 				},
 			},
 		},
-		allocations: map[string]Allocation{
-			"zone-a": {Maximum: 3},
+		allocations: map[string]allocation{
+			"zone-a": {maximum: 3},
 		},
 		allocatedHintsByZone: EndpointZoneInfo{"zone-a": 1, "zone-b": 1, "zone-c": 1},
 		expectedHintsByZone:  nil,
@@ -302,14 +302,14 @@ func Test_getHintsByZone(t *testing.T) {
 		slice: discovery.EndpointSlice{
 			Endpoints: []discovery.Endpoint{
 				{
-					Zone:       utilpointer.StringPtr("zone-a"),
+					Zone:       pointer.String("zone-a"),
 					Hints:      nil,
-					Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+					Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 				},
 			},
 		},
-		allocations: map[string]Allocation{
-			"zone-a": {Maximum: 3},
+		allocations: map[string]allocation{
+			"zone-a": {maximum: 3},
 		},
 		allocatedHintsByZone: EndpointZoneInfo{},
 		expectedHintsByZone:  nil,
@@ -318,14 +318,14 @@ func Test_getHintsByZone(t *testing.T) {
 		slice: discovery.EndpointSlice{
 			Endpoints: []discovery.Endpoint{
 				{
-					Zone:       utilpointer.StringPtr("zone-a"),
+					Zone:       pointer.String("zone-a"),
 					Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{}},
-					Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+					Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 				},
 			},
 		},
-		allocations: map[string]Allocation{
-			"zone-a": {Maximum: 3},
+		allocations: map[string]allocation{
+			"zone-a": {maximum: 3},
 		},
 		allocatedHintsByZone: EndpointZoneInfo{},
 		expectedHintsByZone:  nil,
@@ -334,19 +334,19 @@ func Test_getHintsByZone(t *testing.T) {
 		slice: discovery.EndpointSlice{
 			Endpoints: []discovery.Endpoint{
 				{
-					Zone:       utilpointer.StringPtr("zone-a"),
+					Zone:       pointer.String("zone-a"),
 					Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
-					Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+					Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 				},
 				{
-					Zone:       utilpointer.StringPtr("zone-a"),
+					Zone:       pointer.String("zone-a"),
 					Hints:      &discovery.EndpointHints{ForZones: []discovery.ForZone{{Name: "zone-a"}}},
-					Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+					Conditions: discovery.EndpointConditions{Ready: pointer.Bool(true)},
 				},
 			},
 		},
-		allocations: map[string]Allocation{
-			"zone-a": {Maximum: 2},
+		allocations: map[string]allocation{
+			"zone-a": {maximum: 2},
 		},
 		allocatedHintsByZone: EndpointZoneInfo{"zone-a": 1},
 		expectedHintsByZone:  nil,

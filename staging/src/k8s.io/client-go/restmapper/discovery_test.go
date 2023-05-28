@@ -21,10 +21,10 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/davecgh/go-spew/spew"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/dump"
 	"k8s.io/apimachinery/pkg/version"
 	. "k8s.io/client-go/discovery"
 	"k8s.io/client-go/openapi"
@@ -364,7 +364,7 @@ func TestGetAPIGroupResources(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if !reflect.DeepEqual(test.expected, got) {
-				t.Errorf("unexpected result:\nexpected = %s\ngot = %s", spew.Sdump(test.expected), spew.Sdump(got))
+				t.Errorf("unexpected result:\nexpected = %s\ngot = %s", dump.Pretty(test.expected), dump.Pretty(got))
 			}
 		})
 	}
@@ -419,6 +419,10 @@ func (*fakeFailingDiscovery) OpenAPISchema() (*openapi_v2.Document, error) {
 }
 
 func (c *fakeFailingDiscovery) OpenAPIV3() openapi.Client {
+	panic("implement me")
+}
+
+func (c *fakeFailingDiscovery) WithLegacy() DiscoveryInterface {
 	panic("implement me")
 }
 
@@ -496,6 +500,10 @@ func (c *fakeCachedDiscoveryInterface) OpenAPISchema() (*openapi_v2.Document, er
 }
 
 func (c *fakeCachedDiscoveryInterface) OpenAPIV3() openapi.Client {
+	panic("implement me")
+}
+
+func (c *fakeCachedDiscoveryInterface) WithLegacy() DiscoveryInterface {
 	panic("implement me")
 }
 

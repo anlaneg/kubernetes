@@ -36,7 +36,7 @@ const invalidScore = -1
 type preScoreState struct {
 	Constraints []topologySpreadConstraint
 	// IgnoredNodes is a set of node names which miss some Constraints[*].topologyKey.
-	IgnoredNodes sets.String
+	IgnoredNodes sets.Set[string]
 	// TopologyPairToPodCounts is keyed with topologyPair, and valued with the number of matching pods.
 	TopologyPairToPodCounts map[topologyPair]*int64
 	// TopologyNormalizingWeight is the weight we give to the counts per topology.
@@ -59,11 +59,10 @@ func (s *preScoreState) Clone() framework.StateData {
 func (pl *PodTopologySpread) initPreScoreState(s *preScoreState, pod *v1.Pod, filteredNodes []*v1.Node, requireAllTopologies bool) error {
 	var err error
 	if len(pod.Spec.TopologySpreadConstraints) > 0 {
-		s.Constraints, err = filterTopologySpreadConstraints(
+		s.Constraints, err = pl.filterTopologySpreadConstraints(
 			pod.Spec.TopologySpreadConstraints,
+			pod.Labels,
 			v1.ScheduleAnyway,
-			pl.enableMinDomainsInPodTopologySpread,
-			pl.enableNodeInclusionPolicyInPodTopologySpread,
 		)
 		if err != nil {
 			return fmt.Errorf("obtaining pod's soft topology spread constraints: %w", err)
@@ -127,7 +126,7 @@ func (pl *PodTopologySpread) PreScore(
 	}
 
 	state := &preScoreState{
-		IgnoredNodes:            sets.NewString(),
+		IgnoredNodes:            sets.New[string](),
 		TopologyPairToPodCounts: make(map[topologyPair]*int64),
 	}
 	// Only require that nodes have all the topology labels if using
@@ -150,9 +149,6 @@ func (pl *PodTopologySpread) PreScore(
 	processAllNode := func(i int) {
 		nodeInfo := allNodes[i]
 		node := nodeInfo.Node()
-		if node == nil {
-			return
-		}
 
 		if !pl.enableNodeInclusionPolicyInPodTopologySpread {
 			// `node` should satisfy incoming pod's NodeSelector/NodeAffinity
@@ -184,7 +180,7 @@ func (pl *PodTopologySpread) PreScore(
 			atomic.AddInt64(tpCount, int64(count))
 		}
 	}
-	pl.parallelizer.Until(ctx, len(allNodes), processAllNode)
+	pl.parallelizer.Until(ctx, len(allNodes), processAllNode, pl.Name())
 
 	cycleState.Write(preScoreStateKey, state)
 	return nil

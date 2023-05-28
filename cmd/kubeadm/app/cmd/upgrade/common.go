@@ -19,10 +19,8 @@ package upgrade
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -41,7 +39,6 @@ import (
 	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/features"
 	"k8s.io/kubernetes/cmd/kubeadm/app/phases/upgrade"
-	"k8s.io/kubernetes/cmd/kubeadm/app/phases/uploadconfig"
 	"k8s.io/kubernetes/cmd/kubeadm/app/preflight"
 	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/apiclient"
@@ -73,15 +70,6 @@ func loadConfig(cfgPath string, client clientset.Interface, skipComponentConfigs
 	// This is probably 90% of the time. So we handle it first.
 	if cfgPath == "" {
 		cfg, err := configutil.FetchInitConfigurationFromCluster(client, printer, logPrefix, false, skipComponentConfigs)
-		// In case we fetch a configuration from the cluster, mutate the ImageRepository field
-		// to be 'registry.k8s.io', if it was 'k8s.gcr.io'.
-		// TODO: Remove this in 1.26
-		// https://github.com/kubernetes/kubeadm/issues/2671
-		if err == nil {
-			if err := uploadconfig.MutateImageRepository(cfg, client); err != nil {
-				return nil, false, err
-			}
-		}
 		return cfg, false, err
 	}
 
@@ -131,8 +119,10 @@ func loadConfig(cfgPath string, client clientset.Interface, skipComponentConfigs
 	return initCfg, false, nil
 }
 
+type LoadConfigFunc func(cfgPath string, client clientset.Interface, skipComponentConfigs bool, printer output.Printer) (*kubeadmapi.InitConfiguration, bool, error)
+
 // enforceRequirements verifies that it's okay to upgrade and then returns the variables needed for the rest of the procedure
-func enforceRequirements(flags *applyPlanFlags, args []string, dryRun bool, upgradeApply bool, printer output.Printer) (clientset.Interface, upgrade.VersionGetter, *kubeadmapi.InitConfiguration, error) {
+func enforceRequirements(flags *applyPlanFlags, args []string, dryRun bool, upgradeApply bool, printer output.Printer, loadConfig LoadConfigFunc) (clientset.Interface, upgrade.VersionGetter, *kubeadmapi.InitConfiguration, error) {
 	client, err := getClient(flags.kubeConfigPath, dryRun)
 	if err != nil {
 		return nil, nil, nil, errors.Wrapf(err, "couldn't create a Kubernetes client from file %q", flags.kubeConfigPath)
@@ -163,24 +153,6 @@ func enforceRequirements(flags *applyPlanFlags, args []string, dryRun bool, upgr
 		newK8sVersion = cfg.KubernetesVersion
 	}
 
-	ignorePreflightErrorsSet, err := validation.ValidateIgnorePreflightErrors(flags.ignorePreflightErrors, cfg.NodeRegistration.IgnorePreflightErrors)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	// Also set the union of pre-flight errors to InitConfiguration, to provide a consistent view of the runtime configuration:
-	cfg.NodeRegistration.IgnorePreflightErrors = ignorePreflightErrorsSet.List()
-
-	// Ensure the user is root
-	klog.V(1).Info("running preflight checks")
-	if err := runPreflightChecks(client, ignorePreflightErrorsSet, &cfg.ClusterConfiguration, printer); err != nil {
-		return nil, nil, nil, err
-	}
-
-	// Run healthchecks against the cluster
-	if err := upgrade.CheckClusterHealth(client, &cfg.ClusterConfiguration, ignorePreflightErrorsSet); err != nil {
-		return nil, nil, nil, errors.Wrap(err, "[upgrade/health] FATAL")
-	}
-
 	// The version arg is mandatory, during upgrade apply, unless it's specified in the config file
 	if upgradeApply && newK8sVersion == "" {
 		if err := cmdutil.ValidateExactArgNumber(args, []string{"version"}); err != nil {
@@ -200,6 +172,24 @@ func enforceRequirements(flags *applyPlanFlags, args []string, dryRun bool, upgr
 			// installed one.
 			cfg.KubernetesVersion = newK8sVersion
 		}
+	}
+
+	ignorePreflightErrorsSet, err := validation.ValidateIgnorePreflightErrors(flags.ignorePreflightErrors, cfg.NodeRegistration.IgnorePreflightErrors)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// Also set the union of pre-flight errors to InitConfiguration, to provide a consistent view of the runtime configuration:
+	cfg.NodeRegistration.IgnorePreflightErrors = sets.List(ignorePreflightErrorsSet)
+
+	// Ensure the user is root
+	klog.V(1).Info("running preflight checks")
+	if err := runPreflightChecks(client, ignorePreflightErrorsSet, &cfg.ClusterConfiguration, printer); err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Run healthchecks against the cluster
+	if err := upgrade.CheckClusterHealth(client, &cfg.ClusterConfiguration, ignorePreflightErrorsSet); err != nil {
+		return nil, nil, nil, errors.Wrap(err, "[upgrade/health] FATAL")
 	}
 
 	// If features gates are passed to the command line, use it (otherwise use featureGates from configuration)
@@ -246,17 +236,13 @@ func printConfiguration(clustercfg *kubeadmapi.ClusterConfiguration, w io.Writer
 }
 
 // runPreflightChecks runs the root preflight check
-func runPreflightChecks(client clientset.Interface, ignorePreflightErrors sets.String, cfg *kubeadmapi.ClusterConfiguration, printer output.Printer) error {
+func runPreflightChecks(client clientset.Interface, ignorePreflightErrors sets.Set[string], cfg *kubeadmapi.ClusterConfiguration, printer output.Printer) error {
 	printer.Printf("[preflight] Running pre-flight checks.\n")
 	err := preflight.RunRootCheckOnly(ignorePreflightErrors)
 	if err != nil {
 		return err
 	}
-	err = upgrade.RunCoreDNSMigrationCheck(client, ignorePreflightErrors)
-	if err != nil {
-		return err
-	}
-	return nil
+	return upgrade.RunCoreDNSMigrationCheck(client, ignorePreflightErrors)
 }
 
 // getClient gets a real or fake client depending on whether the user is dry-running or not
@@ -300,22 +286,4 @@ func getWaiter(dryRun bool, client clientset.Interface, timeout time.Duration) a
 		return dryrunutil.NewWaiter()
 	}
 	return apiclient.NewKubeWaiter(client, timeout, os.Stdout)
-}
-
-// InteractivelyConfirmUpgrade asks the user whether they _really_ want to upgrade.
-func InteractivelyConfirmUpgrade(question string) error {
-
-	fmt.Printf("[upgrade/confirm] %s [y/N]: ", question)
-
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Scan()
-	if err := scanner.Err(); err != nil {
-		return errors.Wrap(err, "couldn't read from standard input")
-	}
-	answer := scanner.Text()
-	if strings.ToLower(answer) == "y" || strings.ToLower(answer) == "yes" {
-		return nil
-	}
-
-	return errors.New("won't proceed; the user didn't answer (Y|y) in order to continue")
 }

@@ -17,10 +17,11 @@ limitations under the License.
 package options
 
 import (
-	"io/ioutil"
 	"os"
 	"reflect"
 	"testing"
+
+	utiltesting "k8s.io/client-go/util/testing"
 
 	"github.com/spf13/pflag"
 
@@ -185,12 +186,12 @@ controllerLeaders:
 		t.Run(tc.name, func(t *testing.T) {
 			flags := tc.flags
 			if tc.configContent != "" {
-				configFile, err := ioutil.TempFile("", tc.name)
+				configFile, err := os.CreateTemp("", tc.name)
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer os.Remove(configFile.Name())
-				err = ioutil.WriteFile(configFile.Name(), []byte(tc.configContent), os.FileMode(0755))
+				defer utiltesting.CloseAndRemove(t, configFile)
+				err = os.WriteFile(configFile.Name(), []byte(tc.configContent), os.FileMode(0755))
 				if err != nil {
 					t.Fatal(err)
 				}

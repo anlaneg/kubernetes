@@ -38,7 +38,27 @@ var (
 			Name: "etcd_request_duration_seconds",
 			Help: "Etcd request latency in seconds for each operation and object type.",
 			// Etcd request latency in seconds for each operation and object type.
-			Buckets:        []float64{0.005, 0.025, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 15.0, 30.0, 60.0},
+			// This metric is used for verifying etcd api call latencies SLO
+			// keep consistent with apiserver metric 'requestLatencies' in
+			// staging/src/k8s.io/apiserver/pkg/endpoints/metrics/metrics.go
+			Buckets: []float64{0.005, 0.025, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.25, 1.5, 2, 3,
+				4, 5, 6, 8, 10, 15, 20, 30, 45, 60},
+			StabilityLevel: compbasemetrics.ALPHA,
+		},
+		[]string{"operation", "type"},
+	)
+	etcdRequestCounts = compbasemetrics.NewCounterVec(
+		&compbasemetrics.CounterOpts{
+			Name:           "etcd_requests_total",
+			Help:           "Etcd request counts for each operation and object type.",
+			StabilityLevel: compbasemetrics.ALPHA,
+		},
+		[]string{"operation", "type"},
+	)
+	etcdRequestErrorCounts = compbasemetrics.NewCounterVec(
+		&compbasemetrics.CounterOpts{
+			Name:           "etcd_request_errors_total",
+			Help:           "Etcd failed request counts for each operation and object type.",
 			StabilityLevel: compbasemetrics.ALPHA,
 		},
 		[]string{"operation", "type"},
@@ -53,11 +73,21 @@ var (
 	)
 	dbTotalSize = compbasemetrics.NewGaugeVec(
 		&compbasemetrics.GaugeOpts{
-			Name:           "etcd_db_total_size_in_bytes",
-			Help:           "Total size of the etcd database file physically allocated in bytes.",
+			Subsystem:      "apiserver",
+			Name:           "storage_db_total_size_in_bytes",
+			Help:           "Total size of the storage database file physically allocated in bytes.",
 			StabilityLevel: compbasemetrics.ALPHA,
 		},
 		[]string{"endpoint"},
+	)
+	etcdEventsReceivedCounts = compbasemetrics.NewCounterVec(
+		&compbasemetrics.CounterOpts{
+			Subsystem:      "apiserver",
+			Name:           "storage_events_received_total",
+			Help:           "Number of etcd events received split by kind.",
+			StabilityLevel: compbasemetrics.ALPHA,
+		},
+		[]string{"resource"},
 	)
 	etcdBookmarkCounts = compbasemetrics.NewGaugeVec(
 		&compbasemetrics.GaugeOpts{
@@ -108,6 +138,15 @@ var (
 		},
 		[]string{"resource"},
 	)
+	decodeErrorCounts = compbasemetrics.NewCounterVec(
+		&compbasemetrics.CounterOpts{
+			Namespace:      "apiserver",
+			Name:           "storage_decode_errors_total",
+			Help:           "Number of stored object decode errors split by object type",
+			StabilityLevel: compbasemetrics.ALPHA,
+		},
+		[]string{"resource"},
+	)
 )
 
 var registerMetrics sync.Once
@@ -117,6 +156,8 @@ func Register() {
 	// Register the metrics.
 	registerMetrics.Do(func() {
 		legacyregistry.MustRegister(etcdRequestLatency)
+		legacyregistry.MustRegister(etcdRequestCounts)
+		legacyregistry.MustRegister(etcdRequestErrorCounts)
 		legacyregistry.MustRegister(objectCounts)
 		legacyregistry.MustRegister(dbTotalSize)
 		legacyregistry.MustRegister(etcdBookmarkCounts)
@@ -125,6 +166,7 @@ func Register() {
 		legacyregistry.MustRegister(listStorageNumFetched)
 		legacyregistry.MustRegister(listStorageNumSelectorEvals)
 		legacyregistry.MustRegister(listStorageNumReturned)
+		legacyregistry.MustRegister(decodeErrorCounts)
 	})
 }
 
@@ -133,14 +175,30 @@ func UpdateObjectCount(resourcePrefix string, count int64) {
 	objectCounts.WithLabelValues(resourcePrefix).Set(float64(count))
 }
 
-// RecordEtcdRequestLatency sets the etcd_request_duration_seconds metrics.
-func RecordEtcdRequestLatency(verb, resource string, startTime time.Time) {
-	etcdRequestLatency.WithLabelValues(verb, resource).Observe(sinceInSeconds(startTime))
+// RecordEtcdRequest updates and sets the etcd_request_duration_seconds,
+// etcd_request_total, etcd_request_errors_total metrics.
+func RecordEtcdRequest(verb, resource string, err error, startTime time.Time) {
+	v := []string{verb, resource}
+	etcdRequestLatency.WithLabelValues(v...).Observe(sinceInSeconds(startTime))
+	etcdRequestCounts.WithLabelValues(v...).Inc()
+	if err != nil {
+		etcdRequestErrorCounts.WithLabelValues(v...).Inc()
+	}
+}
+
+// RecordEtcdEvent updated the etcd_events_received_total metric.
+func RecordEtcdEvent(resource string) {
+	etcdEventsReceivedCounts.WithLabelValues(resource).Inc()
 }
 
 // RecordEtcdBookmark updates the etcd_bookmark_counts metric.
 func RecordEtcdBookmark(resource string) {
 	etcdBookmarkCounts.WithLabelValues(resource).Inc()
+}
+
+// RecordDecodeError sets the storage_decode_errors metrics.
+func RecordDecodeError(resource string) {
+	decodeErrorCounts.WithLabelValues(resource).Inc()
 }
 
 // Reset resets the etcd_request_duration_seconds metric.
@@ -149,7 +207,9 @@ func Reset() {
 }
 
 // sinceInSeconds gets the time since the specified start in seconds.
-func sinceInSeconds(start time.Time) float64 {
+//
+// This is a variable to facilitate testing.
+var sinceInSeconds = func(start time.Time) float64 {
 	return time.Since(start).Seconds()
 }
 
