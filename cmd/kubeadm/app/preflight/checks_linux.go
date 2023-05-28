@@ -36,6 +36,7 @@ func (mc MemCheck) Check() (warnings, errorList []error) {
 	// Totalram holds the total usable memory. Unit holds the size of a memory unit in bytes. Multiply them and convert to MB
 	actual := uint64(info.Totalram) * uint64(info.Unit) / 1024 / 1024
 	if actual < mc.Mem {
+		/*主机内存小于mc配置的内存，报错*/
 		errorList = append(errorList, errors.Errorf("the system RAM (%d MB) is less than the minimum %d MB", actual, mc.Mem))
 	}
 	return warnings, errorList

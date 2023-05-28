@@ -22,5 +22,6 @@ import (
 )
 
 func main() {
+	/*执行app.Run并检查其输出error,依据error返回相应的exit code*/
 	kubeadmutil.CheckErr(app.Run())
 }

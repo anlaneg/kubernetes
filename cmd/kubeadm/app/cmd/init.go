@@ -134,14 +134,18 @@ type initData struct {
 //     the newInitOptions method, that implements all the command options validation logic
 func newCmdInit(out io.Writer, initOptions *initOptions) *cobra.Command {
 	if initOptions == nil {
+		/*构造默认的initOptions*/
 		initOptions = newInitOptions()
 	}
+	
+	/*初始化initRunner*/
 	initRunner := workflow.NewRunner()
 
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Run this command in order to set up the Kubernetes control plane",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			/*通过SetDataInitializer设置的回调，初始化initData*/
 			c, err := initRunner.InitData(args)
 			if err != nil {
 				return err
@@ -171,12 +175,14 @@ func newCmdInit(out io.Writer, initOptions *initOptions) *cobra.Command {
 	// defines additional flag that are not used by the init command but that could be eventually used
 	// by the sub-commands automatically generated for phases
 	initRunner.SetAdditionalFlags(func(flags *flag.FlagSet) {
+			/*附加的选项*/
 		options.AddKubeConfigFlag(flags, &initOptions.kubeconfigPath)
 		options.AddKubeConfigDirFlag(flags, &initOptions.kubeconfigDir)
 		options.AddControlPlanExtraArgsFlags(flags, &initOptions.externalClusterCfg.APIServer.ExtraArgs, &initOptions.externalClusterCfg.ControllerManager.ExtraArgs, &initOptions.externalClusterCfg.Scheduler.ExtraArgs)
 	})
 
 	// initialize the workflow runner with the list of phases
+	/*注册preflight阶段*/
 	initRunner.AppendPhase(phases.NewPreflightPhase())
 	initRunner.AppendPhase(phases.NewCertsPhase())
 	initRunner.AppendPhase(phases.NewKubeConfigPhase())

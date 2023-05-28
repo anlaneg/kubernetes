@@ -30,6 +30,7 @@ import (
 
 // Run creates and executes new kubeadm command
 func Run() error {
+	/*初始化日志叁数，flag.ComandLine将被初始化*/
 	klog.InitFlags(nil)
 	pflag.CommandLine.SetNormalizeFunc(cliflag.WordSepNormalizeFunc)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)

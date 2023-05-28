@@ -178,6 +178,7 @@ func (fc FirewalldCheck) Check() (warnings, errorList []error) {
 	}
 
 	if initSystem.ServiceIsActive("firewalld") {
+		/*不容许firewalld服务*/
 		err := errors.Errorf("firewalld is active, please ensure ports %v are open or your cluster may not function correctly",
 			fc.ports)
 		return []error{err}, nil
@@ -202,6 +203,7 @@ func (poc PortOpenCheck) Name() string {
 
 // Check validates if the particular port is available.
 func (poc PortOpenCheck) Check() (warnings, errorList []error) {
+	/*检查提定端口是否可用*/
 	klog.V(1).Infof("validating availability of port %d", poc.port)
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", poc.port))
@@ -279,6 +281,7 @@ func (fac FileAvailableCheck) Name() string {
 
 // Check validates if the given file does not already exist.
 func (fac FileAvailableCheck) Check() (warnings, errorList []error) {
+	/*要求fac.Path路径必须存在*/
 	klog.V(1).Infof("validating the existence of file %s", fac.Path)
 
 	if _, err := os.Stat(fac.Path); err == nil {
@@ -435,11 +438,13 @@ func (hst HTTPProxyCheck) Check() (warnings, errorList []error) {
 		u.Host = net.JoinHostPort(hst.Host, "1234")
 	}
 
+	/*构造向hst.Host待进行的http请求*/
 	req, err := http.NewRequest("GET", u.String(), nil)
 	if err != nil {
 		return nil, []error{err}
 	}
 
+	/*采用代理进行请求*/
 	proxy, err := netutil.SetOldTransportDefaults(&http.Transport{}).Proxy(req)
 	if err != nil {
 		return nil, []error{err}
@@ -567,6 +572,7 @@ func (KubernetesVersionCheck) Name() string {
 
 // Check validates Kubernetes and kubeadm versions
 func (kubever KubernetesVersionCheck) Check() (warnings, errorList []error) {
+	/*检查k8s与kubeadm的版本号*/
 	klog.V(1).Infoln("validating Kubernetes and kubeadm version")
 	// Skip this check for "super-custom builds", where apimachinery/the overall codebase version is not set.
 	if strings.HasPrefix(kubever.KubeadmVersion, "v0.0.0") {
@@ -873,8 +879,10 @@ func (NumCPUCheck) Name() string {
 
 // Check number of CPUs required by kubeadm
 func (ncc NumCPUCheck) Check() (warnings, errorList []error) {
+	/*取当前机器CPu数目*/
 	numCPU := runtime.NumCPU()
 	if numCPU < ncc.NumCPU {
+		/*当前机器cpu不得小于ncc配置的cpu数目*/
 		errorList = append(errorList, errors.Errorf("the number of available CPUs %d is less than the required %d", numCPU, ncc.NumCPU))
 	}
 	return warnings, errorList
@@ -897,6 +905,7 @@ func (MemCheck) Name() string {
 func RunInitNodeChecks(execer utilsexec.Interface, cfg *kubeadmapi.InitConfiguration, ignorePreflightErrors sets.String, isSecondaryControlPlane bool, downloadCerts bool) error {
 	if !isSecondaryControlPlane {
 		// First, check if we're root separately from the other preflight checks and fail fast
+		/*首先检查是否root用户*/
 		if err := RunRootCheckOnly(ignorePreflightErrors); err != nil {
 			return err
 		}
@@ -904,19 +913,24 @@ func RunInitNodeChecks(execer utilsexec.Interface, cfg *kubeadmapi.InitConfigura
 
 	manifestsDir := filepath.Join(kubeadmconstants.KubernetesDir, kubeadmconstants.ManifestsSubDirName)
 	checks := []Checker{
-		NumCPUCheck{NumCPU: kubeadmconstants.ControlPlaneNumCPU},
+		NumCPUCheck{NumCPU: kubeadmconstants.ControlPlaneNumCPU},/*cpu最小数目检查*/
 		// Linux only
 		// TODO: support other OS, if control-plane is supported on it.
-		MemCheck{Mem: kubeadmconstants.ControlPlaneMem},
+		MemCheck{Mem: kubeadmconstants.ControlPlaneMem},/*最小内存检查*/
+		/*kubernetes版本与kubeadm版本匹配检查*/
 		KubernetesVersionCheck{KubernetesVersion: cfg.KubernetesVersion, KubeadmVersion: kubeadmversion.Get().GitVersion},
+		/*拒绝firewalld服务*/
 		FirewalldCheck{ports: []int{int(cfg.LocalAPIEndpoint.BindPort), kubeadmconstants.KubeletPort}},
+		/*检查下面3个端口号未被占用*/
 		PortOpenCheck{port: int(cfg.LocalAPIEndpoint.BindPort)},
 		PortOpenCheck{port: kubeadmconstants.KubeSchedulerPort},
 		PortOpenCheck{port: kubeadmconstants.KubeControllerManagerPort},
+		/*要求以下文件路径必须存在*/
 		FileAvailableCheck{Path: kubeadmconstants.GetStaticPodFilepath(kubeadmconstants.KubeAPIServer, manifestsDir)},
 		FileAvailableCheck{Path: kubeadmconstants.GetStaticPodFilepath(kubeadmconstants.KubeControllerManager, manifestsDir)},
 		FileAvailableCheck{Path: kubeadmconstants.GetStaticPodFilepath(kubeadmconstants.KubeScheduler, manifestsDir)},
 		FileAvailableCheck{Path: kubeadmconstants.GetStaticPodFilepath(kubeadmconstants.Etcd, manifestsDir)},
+		/*代理要求可通*/
 		HTTPProxyCheck{Proto: "https", Host: cfg.LocalAPIEndpoint.AdvertiseAddress},
 	}
 	cidrs := strings.Split(cfg.Networking.ServiceSubnet, ",")
@@ -970,6 +984,7 @@ func RunInitNodeChecks(execer utilsexec.Interface, cfg *kubeadmapi.InitConfigura
 		}
 	}
 
+	/*执行以下check检查*/
 	return RunChecks(checks, os.Stderr, ignorePreflightErrors)
 }
 
@@ -1052,6 +1067,7 @@ func addCommonChecks(execer utilsexec.Interface, k8sVersion string, nodeReg *kub
 
 // RunRootCheckOnly initializes checks slice of structs and call RunChecks
 func RunRootCheckOnly(ignorePreflightErrors sets.String) error {
+	/*检查用户权限是否正确，linux要求root用户*/
 	checks := []Checker{
 		IsPrivilegedUserCheck{},
 	}
@@ -1069,6 +1085,7 @@ func RunPullImagesCheck(execer utilsexec.Interface, cfg *kubeadmapi.InitConfigur
 	checks := []Checker{
 		ImagePullCheck{runtime: containerRuntime, imageList: images.GetControlPlaneImages(&cfg.ClusterConfiguration), imagePullPolicy: cfg.NodeRegistration.ImagePullPolicy},
 	}
+	/*执行image pull check*/
 	return RunChecks(checks, os.Stderr, ignorePreflightErrors)
 }
 
@@ -1077,24 +1094,30 @@ func RunPullImagesCheck(execer utilsexec.Interface, cfg *kubeadmapi.InitConfigur
 func RunChecks(checks []Checker, ww io.Writer, ignorePreflightErrors sets.String) error {
 	var errsBuffer bytes.Buffer
 
+	/*遍历提供的一组check,执行Check回调*/
 	for _, c := range checks {
 		name := c.Name()
 		warnings, errs := c.Check()
 
+		/*如果name不在ignore,则errs不加入Warnings*/
 		if setHasItemOrAll(ignorePreflightErrors, name) {
 			// Decrease severity of errors to warnings for this check
 			warnings = append(warnings, errs...)
 			errs = []error{}
 		}
 
+		/*格式化所有warnings,并输出到ww*/
 		for _, w := range warnings {
 			io.WriteString(ww, fmt.Sprintf("\t[WARNING %s]: %v\n", name, w))
 		}
+		
+		/*格式化所有errs*/
 		for _, i := range errs {
 			errsBuffer.WriteString(fmt.Sprintf("\t[ERROR %s]: %v\n", name, i.Error()))
 		}
 	}
 	if errsBuffer.Len() > 0 {
+		/*返回errs*/
 		return &Error{Msg: errsBuffer.String()}
 	}
 	return nil
@@ -1103,6 +1126,7 @@ func RunChecks(checks []Checker, ww io.Writer, ignorePreflightErrors sets.String
 // setHasItemOrAll is helper function that return true if item is present in the set (case insensitive) or special key 'all' is present
 func setHasItemOrAll(s sets.String, item string) bool {
 	if s.Has("all") || s.Has(strings.ToLower(item)) {
+		/*含有'all'或者含有item,则返回true*/
 		return true
 	}
 	return false

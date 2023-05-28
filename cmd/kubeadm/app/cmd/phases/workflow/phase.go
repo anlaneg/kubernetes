@@ -46,12 +46,12 @@ type Phase struct {
 	Hidden bool
 
 	// Phases defines a nested, ordered sequence of phases.
-	Phases []Phase
+	Phases []Phase /*容许有多个子阶段*/
 
 	// RunAllSiblings allows to assign to a phase the responsibility to
 	// run all the sibling phases
 	// Nb. phase marked as RunAllSiblings can not have Run functions
-	RunAllSiblings bool
+	RunAllSiblings bool /*如果为true,则不为其创建runner*/
 
 	// Run defines a function implementing the phase action.
 	// It is recommended to implent type assertion, e.g. using golang type switch,

@@ -48,7 +48,7 @@ type Runner struct {
 	Options RunnerOptions
 
 	// Phases composing the workflow to be managed by the runner.
-	Phases []Phase
+	Phases []Phase /*记录要运行的阶段*/
 
 	// runDataInitializer defines a function that creates the runtime data shared
 	// among all the phases included in the workflow
@@ -77,8 +77,9 @@ type Runner struct {
 // of contextual information derived by the workflow managed by the Runner.
 // TODO: If we ever decide to get more sophisticated we can swap this type with a well defined dag or tree library.
 type phaseRunner struct {
+	/*各阶段对应的Runner*/
 	// Phase provide access to the phase implementation
-	Phase
+	Phase /*对应哪个阶段*/
 
 	// provide access to the parent phase in the workflow managed by the Runner.
 	parent *phaseRunner
@@ -102,6 +103,7 @@ type phaseRunner struct {
 
 // NewRunner return a new runner for composable kubeadm workflows.
 func NewRunner() *Runner {
+	/*初始化Runner对象*/
 	return &Runner{
 		Phases: []Phase{},
 	}
@@ -109,6 +111,7 @@ func NewRunner() *Runner {
 
 // AppendPhase adds the given phase to the ordered sequence of phases managed by the runner.
 func (e *Runner) AppendPhase(t Phase) {
+	/*在phases后面增加新的阶段*/
 	e.Phases = append(e.Phases, t)
 }
 
@@ -171,6 +174,7 @@ func (e *Runner) computePhaseRunFlags() (map[string]bool, error) {
 // among all the phases included in the workflow.
 // The method will receive in input the cmd that triggers the Runner (only if the runner is BindToCommand)
 func (e *Runner) SetDataInitializer(builder func(cmd *cobra.Command, args []string) (RunData, error)) {
+	/*设置runDataInitializer对应的回调*/
 	e.runDataInitializer = builder
 }
 
@@ -179,6 +183,7 @@ func (e *Runner) SetDataInitializer(builder func(cmd *cobra.Command, args []stri
 // before actually executing Run, or implicitly when invoking Run.
 func (e *Runner) InitData(args []string) (RunData, error) {
 	if e.runData == nil && e.runDataInitializer != nil {
+		/*通过runDataInitializer初始化，e.runData*/
 		var err error
 		if e.runData, err = e.runDataInitializer(e.runCmd, args); err != nil {
 			return nil, err
@@ -204,6 +209,7 @@ func (e *Runner) Run(args []string) error {
 		return err
 	}
 
+	/*遍历所有phase runner,执行此函数*/
 	err = e.visitAll(func(p *phaseRunner) error {
 		// if the phase should not be run, skip the phase.
 		if run, ok := phaseRunFlags[p.generatedName]; !run || !ok {
@@ -295,13 +301,15 @@ func (e *Runner) SetAdditionalFlags(fn func(*pflag.FlagSet)) {
 // Please note that this command needs to be done once all the phases are added to the Runner.
 func (e *Runner) BindToCommand(cmd *cobra.Command) {
 	// keep track of the command triggering the runner
-	e.runCmd = cmd
+	e.runCmd = cmd /*触发此runner的命令*/
 
 	// return early if no phases were added
 	if len(e.Phases) == 0 {
+		/*可执行阶段为0，直接返回*/
 		return
 	}
 
+	/*创建phase runner*/
 	e.prepareForExecution()
 
 	// adds the phases subcommand
@@ -330,7 +338,7 @@ func (e *Runner) BindToCommand(cmd *cobra.Command) {
 
 		// creates phase subcommand
 		phaseCmd := &cobra.Command{
-			Use:     strings.ToLower(p.Name),
+			Use:     strings.ToLower(p.Name),/*阶段名称*/
 			Short:   p.Short,
 			Long:    p.Long,
 			Example: p.Example,
@@ -417,6 +425,7 @@ func inheritsFlags(sourceFlags, targetFlags *pflag.FlagSet, cmdFlags []string) {
 // in the execution order and executing a func on each phase.
 // Nested phase are visited immediately after their parent phase.
 func (e *Runner) visitAll(fn func(*phaseRunner) error) error {
+	/*遍历runner所有的Phase runner，并通过fn进行处理*/
 	for _, currentRunner := range e.phaseRunners {
 		if err := fn(currentRunner); err != nil {
 			return err
@@ -432,6 +441,7 @@ func (e *Runner) prepareForExecution() {
 	for _, phase := range e.Phases {
 		// skips phases that are meant to create special subcommands only
 		if phase.RunAllSiblings {
+			/*跳过此phase,不为其创建phase runner*/
 			continue
 		}
 
@@ -448,6 +458,7 @@ func addPhaseRunner(e *Runner, parentRunner *phaseRunner, phase Phase) {
 	selfPath := []string{generatedName}
 
 	if parentRunner != nil {
+		/*存在父runner,则此runner的路径为父名称+己名称*/
 		generatedName = strings.Join([]string{parentRunner.generatedName, generatedName}, phaseSeparator)
 		use = fmt.Sprintf("%s%s", phaseSeparator, use)
 		selfPath = append(parentRunner.selfPath, selfPath...)
@@ -469,13 +480,15 @@ func addPhaseRunner(e *Runner, parentRunner *phaseRunner, phase Phase) {
 	// iterate for the nested, ordered list of phases, thus storing
 	// phases in the expected executing order (child phase are stored immediately after their parent phase).
 	for _, childPhase := range phase.Phases {
-		addPhaseRunner(e, currentRunner, childPhase)
+		/*如果当前阶段存在子阶段，则添加子阶段*/
+		addPhaseRunner(e, currentRunner/*父阶段runner*/, childPhase)
 	}
 }
 
 // cleanName makes phase name suitable for the runner help, by lowercasing the name
 // and removing args descriptors, if any
 func cleanName(name string) string {
+	/*名称规范化，全小写，如果有空格，则截取空格前部分*/
 	ret := strings.ToLower(name)
 	if pos := strings.Index(ret, " "); pos != -1 {
 		ret = ret[:pos]

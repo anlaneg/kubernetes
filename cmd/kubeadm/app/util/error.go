@@ -40,11 +40,15 @@ func fatal(msg string, code int) {
 	if len(msg) > 0 {
 		// add newline if needed
 		if !strings.HasSuffix(msg, "\n") {
+			/*防止消息内空无换行*/
 			msg += "\n"
 		}
 
+		/*执行输出*/
 		fmt.Fprint(os.Stderr, msg)
 	}
+	
+	/*按参数要求，返回相应的exit code*/
 	os.Exit(code)
 }
 
@@ -54,6 +58,7 @@ func fatal(msg string, code int) {
 // This method is generic to the command in use and may be used by non-Kubectl
 // commands.
 func CheckErr(err error) {
+	/*检查error,并通过fatal进行exit code处理*/
 	checkErr(err, fatal)
 }
 
@@ -65,13 +70,13 @@ type preflightError interface {
 
 // checkErr formats a given error as a string and calls the passed handleErr
 // func with that string and an exit code.
-func checkErr(err error, handleErr func(string, int)) {
+func checkErr(err error, handleErr/*错误信息执行函数*/ func(string, int)) {
 
 	var msg string
 	if err != nil {
 		msg = fmt.Sprintf("%s\nTo see the stack trace of this error execute with --v=5 or higher", err.Error())
 		// check if the verbosity level in klog is high enough and print a stack trace.
-		f := flag.CommandLine.Lookup("v")
+		f := flag.CommandLine.Lookup("v")/*是否有-v标记*/
 		if f != nil {
 			// assume that the "v" flag contains a parseable Int32 as per klog's "Level" type alias,
 			// thus no error from ParseInt is handled here.
@@ -79,12 +84,14 @@ func checkErr(err error, handleErr func(string, int)) {
 				// https://git.k8s.io/community/contributors/devel/sig-instrumentation/logging.md
 				// klog.V(5) - Trace level verbosity
 				if v > 4 {
+					/*v>4，显示err详情*/
 					msg = fmt.Sprintf("%+v", err)
 				}
 			}
 		}
 	}
 
+	/*按error类型，选不同的exit code*/
 	switch err.(type) {
 	case nil:
 		return
@@ -100,6 +107,7 @@ func checkErr(err error, handleErr func(string, int)) {
 
 // FormatErrMsg returns a human-readable string describing the slice of errors passed to the function
 func FormatErrMsg(errs []error) string {
+	/*将一组error信息，格式化为字符串*/
 	var errMsg string
 	for _, err := range errs {
 		errMsg = fmt.Sprintf("%s\t- %s\n", errMsg, err.Error())

@@ -404,8 +404,11 @@ func InitFlags(flagset *flag.FlagSet) {
 		flagset = flag.CommandLine
 	}
 
+	/*日志目录*/
 	flagset.StringVar(&logging.logDir, "log_dir", logging.logDir, "If non-empty, write log files in this directory")
+	/*日志文件名称*/
 	flagset.StringVar(&logging.logFile, "log_file", logging.logFile, "If non-empty, use this log file")
+	/*日志文件大小*/
 	flagset.Uint64Var(&logging.logFileMaxSizeMB, "log_file_max_size", logging.logFileMaxSizeMB,
 		"Defines the maximum size a log file can grow to. Unit is megabytes. "+
 			"If the value is 0, the maximum file size is unlimited.")

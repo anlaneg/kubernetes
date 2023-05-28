@@ -80,17 +80,30 @@ func NewKubeadmCommand(in io.Reader, out, err io.Writer) *cobra.Command {
 
 	cmds.ResetFlags()
 
+	/*添加命令*/
+	
+	/*certs命令及其子命令*/
 	cmds.AddCommand(newCmdCertsUtility(out))
+	/*completion命令*/
 	cmds.AddCommand(newCmdCompletion(out, ""))
+	/*config命令*/
 	cmds.AddCommand(newCmdConfig(out))
+	/*init命令*/
 	cmds.AddCommand(newCmdInit(out, nil))
+	/*join命令*/
 	cmds.AddCommand(newCmdJoin(out, nil))
+	/*reset命令*/
 	cmds.AddCommand(newCmdReset(in, out, nil))
+	/*version命令*/
 	cmds.AddCommand(newCmdVersion(out))
+	/*token命令*/
 	cmds.AddCommand(newCmdToken(out, err))
+	/*upgrade命令*/
 	cmds.AddCommand(upgrade.NewCmdUpgrade(out))
+	/*alpha命令*/
 	cmds.AddCommand(alpha.NewCmdAlpha())
 	options.AddKubeadmOtherFlags(cmds.PersistentFlags(), &rootfsPath)
+	/*kubeconfig命令*/
 	cmds.AddCommand(newCmdKubeConfigUtility(out))
 
 	return cmds
