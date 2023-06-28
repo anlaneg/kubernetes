@@ -40,6 +40,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -170,6 +171,21 @@ func getCurrentKubeletConfig(ctx context.Context) (*kubeletconfig.KubeletConfigu
 	return e2enodekubelet.GetCurrentKubeletConfig(ctx, framework.TestContext.NodeName, "", false, framework.TestContext.StandaloneMode)
 }
 
+func cleanupPods(f *framework.Framework) {
+	ginkgo.AfterEach(func(ctx context.Context) {
+		ginkgo.By("Deleting any Pods created by the test in namespace: " + f.Namespace.Name)
+		l, err := e2epod.NewPodClient(f).List(ctx, metav1.ListOptions{})
+		framework.ExpectNoError(err)
+		for _, p := range l.Items {
+			if p.Namespace != f.Namespace.Name {
+				continue
+			}
+			framework.Logf("Deleting pod: %s", p.Name)
+			e2epod.NewPodClient(f).DeleteSync(ctx, p.Name, metav1.DeleteOptions{}, 2*time.Minute)
+		}
+	})
+}
+
 // Must be called within a Context. Allows the function to modify the KubeletConfiguration during the BeforeEach of the context.
 // The change is reverted in the AfterEach of the context.
 // Returns true on success.
@@ -289,7 +305,7 @@ func logKubeletLatencyMetrics(ctx context.Context, metricNames ...string) {
 	for _, key := range metricNames {
 		metricSet.Insert(kubeletmetrics.KubeletSubsystem + "_" + key)
 	}
-	metric, err := e2emetrics.GrabKubeletMetricsWithoutProxy(ctx, fmt.Sprintf("%s:%d", framework.TestContext.NodeName, ports.KubeletReadOnlyPort), "/metrics")
+	metric, err := e2emetrics.GrabKubeletMetricsWithoutProxy(ctx, fmt.Sprintf("%s:%d", nodeNameOrIP(), ports.KubeletReadOnlyPort), "/metrics")
 	if err != nil {
 		framework.Logf("Error getting kubelet metrics: %v", err)
 	} else {
@@ -622,4 +638,23 @@ func WaitForPodInitContainerToFail(ctx context.Context, c clientset.Interface, n
 		}
 		return false, nil
 	})
+}
+
+func nodeNameOrIP() string {
+	// Check if the node name in test context can be resolved
+	if ips, err := net.LookupIP(framework.TestContext.NodeName); err != nil {
+		if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
+			// if it can't be resolved, pick a host interface
+			if ip, err := utilnet.ChooseHostInterface(); err == nil {
+				return ip.String()
+			}
+		}
+	} else {
+		if len(ips) > 0 {
+			// yay, node name resolved correctly, pick the first
+			return ips[0].String()
+		}
+	}
+	// fallback to node name in test context
+	return framework.TestContext.NodeName
 }

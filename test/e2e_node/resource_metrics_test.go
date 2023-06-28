@@ -131,7 +131,7 @@ var _ = SIGDescribe("ResourceMetricsAPI [NodeFeature:ResourceMetrics]", func() {
 
 func getResourceMetrics(ctx context.Context) (e2emetrics.KubeletMetrics, error) {
 	ginkgo.By("getting stable resource metrics API")
-	return e2emetrics.GrabKubeletMetricsWithoutProxy(ctx, framework.TestContext.NodeName+":10255", "/metrics/resource")
+	return e2emetrics.GrabKubeletMetricsWithoutProxy(ctx, nodeNameOrIP()+":10255", "/metrics/resource")
 }
 
 func nodeID(element interface{}) string {
@@ -161,5 +161,7 @@ func boundedSample(lower, upper interface{}) types.GomegaMatcher {
 				gomega.BeTemporally(">=", time.Now().Add(-maxStatsAge)),
 				// Now() is the test start time, not the match time, so permit a few extra minutes.
 				gomega.BeTemporally("<", time.Now().Add(2*time.Minute))),
-		)}))
+		),
+		"Histogram": gstruct.Ignore(),
+	}))
 }

@@ -245,22 +245,21 @@ func (pl *dynamicResources) Name() string {
 
 // EventsToRegister returns the possible events that may make a Pod
 // failed by this plugin schedulable.
-func (pl *dynamicResources) EventsToRegister() []framework.ClusterEvent {
+func (pl *dynamicResources) EventsToRegister() []framework.ClusterEventWithHint {
 	if !pl.enabled {
 		return nil
 	}
-
-	events := []framework.ClusterEvent{
+	events := []framework.ClusterEventWithHint{
 		// Allocation is tracked in ResourceClaims, so any changes may make the pods schedulable.
-		{Resource: framework.ResourceClaim, ActionType: framework.Add | framework.Update},
+		{Event: framework.ClusterEvent{Resource: framework.ResourceClaim, ActionType: framework.Add | framework.Update}},
 		// When a driver has provided additional information, a pod waiting for that information
 		// may be schedulable.
 		// TODO (#113702): can we change this so that such an event does not trigger *all* pods?
 		// Yes: https://github.com/kubernetes/kubernetes/blob/abcbaed0784baf5ed2382aae9705a8918f2daa18/pkg/scheduler/eventhandlers.go#L70
-		{Resource: framework.PodSchedulingContext, ActionType: framework.Add | framework.Update},
+		{Event: framework.ClusterEvent{Resource: framework.PodSchedulingContext, ActionType: framework.Add | framework.Update}},
 		// A resource might depend on node labels for topology filtering.
 		// A new or updated node may make pods schedulable.
-		{Resource: framework.Node, ActionType: framework.Add | framework.UpdateNodeLabel},
+		{Event: framework.ClusterEvent{Resource: framework.Node, ActionType: framework.Add | framework.UpdateNodeLabel}},
 	}
 	return events
 }
@@ -305,7 +304,7 @@ func (pl *dynamicResources) podResourceClaims(pod *v1.Pod) ([]*resourcev1alpha2.
 // the pod cannot be scheduled at the moment on any node.
 func (pl *dynamicResources) PreFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
 	if !pl.enabled {
-		return nil, nil
+		return nil, framework.NewStatus(framework.Skip)
 	}
 	logger := klog.FromContext(ctx)
 
@@ -321,10 +320,10 @@ func (pl *dynamicResources) PreFilter(ctx context.Context, state *framework.Cycl
 		return nil, statusUnschedulable(logger, err.Error())
 	}
 	logger.V(5).Info("pod resource claims", "pod", klog.KObj(pod), "resourceclaims", klog.KObjSlice(claims))
-	// If the pod does not reference any claim, we don't need to do
-	// anything for it.
+	// If the pod does not reference any claim,
+	// DynamicResources Filter has nothing to do with the Pod.
 	if len(claims) == 0 {
-		return nil, nil
+		return nil, framework.NewStatus(framework.Skip)
 	}
 
 	s.availableOnNodes = make([]*nodeaffinity.NodeSelector, len(claims))

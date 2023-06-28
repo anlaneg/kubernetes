@@ -31,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	apimachineryversion "k8s.io/apimachinery/pkg/version"
-	bootstrapapi "k8s.io/cluster-bootstrap/token/api"
 	componentversion "k8s.io/component-base/version"
 	netutils "k8s.io/utils/net"
 )
@@ -243,10 +242,6 @@ const (
 	// The node subnet mask size must be no more than the pod subnet mask size + 16
 	PodSubnetNodeMaskMaxDiff = 16
 
-	// DefaultTokenDuration specifies the default amount of time that a bootstrap token will be valid
-	// Default behaviour is 24 hours
-	DefaultTokenDuration = 24 * time.Hour
-
 	// DefaultCertTokenDuration specifies the default amount of time that the token used by upload certs will be valid
 	// Default behaviour is 2 hours
 	DefaultCertTokenDuration = 2 * time.Hour
@@ -306,7 +301,7 @@ const (
 	KubeletHealthzPort = 10248
 
 	// MinExternalEtcdVersion indicates minimum external etcd version which kubeadm supports
-	MinExternalEtcdVersion = "3.4.3-0"
+	MinExternalEtcdVersion = "3.4.13-4"
 
 	// DefaultEtcdVersion indicates the default etcd version that kubeadm uses
 	DefaultEtcdVersion = "3.5.9-0"
@@ -447,12 +442,6 @@ var (
 		Effect: v1.TaintEffectNoSchedule,
 	}
 
-	// DefaultTokenUsages specifies the default functions a token will get
-	DefaultTokenUsages = bootstrapapi.KnownTokenUsages
-
-	// DefaultTokenGroups specifies the default groups that this token will authenticate as when used for authentication
-	DefaultTokenGroups = []string{NodeBootstrapTokenAuthGroup}
-
 	// ControlPlaneComponents defines the control-plane component names
 	ControlPlaneComponents = []string{KubeAPIServer, KubeControllerManager, KubeScheduler}
 
@@ -467,17 +456,12 @@ var (
 
 	// SupportedEtcdVersion lists officially supported etcd versions with corresponding Kubernetes releases
 	SupportedEtcdVersion = map[uint8]string{
-		17: "3.4.3-0",
-		18: "3.4.3-0",
-		19: "3.4.18-0",
-		20: "3.4.18-0",
-		21: "3.4.18-0",
-		22: "3.5.8-0",
-		23: "3.5.8-0",
-		24: "3.5.8-0",
-		25: "3.5.8-0",
-		26: "3.5.8-0",
-		27: "3.5.8-0",
+		22: "3.5.9-0",
+		23: "3.5.9-0",
+		24: "3.5.9-0",
+		25: "3.5.9-0",
+		26: "3.5.9-0",
+		27: "3.5.9-0",
 		28: "3.5.9-0",
 	}
 
