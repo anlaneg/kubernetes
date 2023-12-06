@@ -26,7 +26,7 @@ release 0.20, build kind from latest main branch sources or use Kind release bin
 
 ### Build kind node image
 
-After building Kubernetes, in Kubernetes source code tree biuld new node image:
+After building Kubernetes, in Kubernetes source code tree build new node image:
 ```bash
 $ kind build node-image --image dra/node:latest $(pwd)
 ```
@@ -41,10 +41,10 @@ $ kind create cluster --config test/e2e/dra/kind.yaml --image dra/node:latest
 
 - Build ginkgo
 
-> NB: If you are using go workspace you must disable it `GOWORK=off make gingko`
+> NB: If you are using go workspace you must disable it `GOWORK=off make ginkgo`
 
 ```bash
-$ make gingko
+$ make ginkgo
 ```
 
 - Run e2e tests for the `Dynamic Resource Allocation` feature:

@@ -23,8 +23,10 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	coreinformers "k8s.io/client-go/informers/core/v1"
@@ -33,6 +35,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 	configv1 "k8s.io/kube-scheduler/config/v1"
+	"k8s.io/kubernetes/pkg/features"
 	schedulerapi "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/scheme"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
@@ -69,7 +72,7 @@ type Scheduler struct {
 	// is available. We don't use a channel for this, because scheduling
 	// a pod may take some amount of time and we don't want pods to get
 	// stale while they sit in a channel.
-	NextPod func() *framework.QueuedPodInfo
+	NextPod func(logger klog.Logger) (*framework.QueuedPodInfo, error)
 
 	// FailureHandler is called upon a scheduling failure.
 	FailureHandler FailureHandlerFn
@@ -100,6 +103,9 @@ type Scheduler struct {
 	// otherwise logging functions will access a nil sink and
 	// panic.
 	logger klog.Logger
+
+	// registeredHandlers contains the registrations of all handlers. It's used to check if all handlers have finished syncing before the scheduling cycles start.
+	registeredHandlers []cache.ResourceEventHandlerRegistration
 }
 
 func (sched *Scheduler) applyDefaultHandlers() {
@@ -341,32 +347,47 @@ func New(ctx context.Context,
 		nodeInfoSnapshot:         snapshot,
 		percentageOfNodesToScore: options.percentageOfNodesToScore,
 		Extenders:                extenders,
-		NextPod:                  internalqueue.MakeNextPodFunc(logger, podQueue),
 		StopEverything:           stopEverything,
 		SchedulingQueue:          podQueue,
 		Profiles:                 profiles,
 		logger:                   logger,
 	}
+	sched.NextPod = podQueue.Pop
 	sched.applyDefaultHandlers()
 
-	addAllEventHandlers(sched, informerFactory, dynInformerFactory, unionedGVKs(queueingHintsPerProfile))
+	if err = addAllEventHandlers(sched, informerFactory, dynInformerFactory, unionedGVKs(queueingHintsPerProfile)); err != nil {
+		return nil, fmt.Errorf("adding event handlers: %w", err)
+	}
 
 	return sched, nil
 }
 
 // defaultQueueingHintFn is the default queueing hint function.
-// It always returns QueueAfterBackoff as the queueing hint.
-var defaultQueueingHintFn = func(_ *v1.Pod, _, _ interface{}) framework.QueueingHint {
-	return framework.QueueAfterBackoff
+// It always returns Queue as the queueing hint.
+var defaultQueueingHintFn = func(_ klog.Logger, _ *v1.Pod, _, _ interface{}) (framework.QueueingHint, error) {
+	return framework.Queue, nil
 }
 
 func buildQueueingHintMap(es []framework.EnqueueExtensions) internalqueue.QueueingHintMap {
-	queueingHintMap := make(map[framework.ClusterEvent][]*internalqueue.QueueingHintFunction)
+	queueingHintMap := make(internalqueue.QueueingHintMap)
 	for _, e := range es {
 		events := e.EventsToRegister()
+
+		// This will happen when plugin registers with empty events, it's usually the case a pod
+		// will become reschedulable only for self-update, e.g. schedulingGates plugin, the pod
+		// will enter into the activeQ via priorityQueue.Update().
+		if len(events) == 0 {
+			continue
+		}
+
+		// Note: Rarely, a plugin implements EnqueueExtensions but returns nil.
+		// We treat it as: the plugin is not interested in any event, and hence pod failed by that plugin
+		// cannot be moved by any regular cluster event.
+		// So, we can just ignore such EventsToRegister here.
+
 		for _, event := range events {
 			fn := event.QueueingHintFn
-			if fn == nil {
+			if fn == nil || !utilfeature.DefaultFeatureGate.Enabled(features.SchedulerQueueingHints) {
 				fn = defaultQueueingHintFn
 			}
 
@@ -485,5 +506,16 @@ func newPodInformer(cs clientset.Interface, resyncPeriod time.Duration) cache.Sh
 	tweakListOptions := func(options *metav1.ListOptions) {
 		options.FieldSelector = selector
 	}
-	return coreinformers.NewFilteredPodInformer(cs, metav1.NamespaceAll, resyncPeriod, cache.Indexers{}, tweakListOptions)
+	informer := coreinformers.NewFilteredPodInformer(cs, metav1.NamespaceAll, resyncPeriod, cache.Indexers{}, tweakListOptions)
+
+	// Dropping `.metadata.managedFields` to improve memory usage.
+	// The Extract workflow (i.e. `ExtractPod`) should be unused.
+	trim := func(obj interface{}) (interface{}, error) {
+		if accessor, err := meta.Accessor(obj); err == nil {
+			accessor.SetManagedFields(nil)
+		}
+		return obj, nil
+	}
+	informer.SetTransform(trim)
+	return informer
 }

@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -49,8 +48,10 @@ func deepEqualWithoutGeneration(actual *nodeInfoListItem, expected *framework.No
 	if expected != nil {
 		expected.Generation = 0
 	}
-	if actual != nil && !reflect.DeepEqual(actual.info, expected) {
-		return fmt.Errorf("got node info %s, want %s", actual.info, expected)
+	if actual != nil {
+		if diff := cmp.Diff(expected, actual.info, cmp.AllowUnexported(framework.NodeInfo{})); diff != "" {
+			return fmt.Errorf("Unexpected node info (-want,+got):\n%s", diff)
+		}
 	}
 	return nil
 }
@@ -100,20 +101,22 @@ func newNodeInfo(requestedResource *framework.Resource,
 func TestAssumePodScheduled(t *testing.T) {
 	nodeName := "node"
 	testPods := []*v1.Pod{
-		makeBasePod(t, nodeName, "test", "100m", "500", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
-		makeBasePod(t, nodeName, "test-1", "100m", "500", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
-		makeBasePod(t, nodeName, "test-2", "200m", "1Ki", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}),
-		makeBasePod(t, nodeName, "test-nonzero", "", "", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
-		makeBasePod(t, nodeName, "test", "100m", "500", "example.com/foo:3", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
-		makeBasePod(t, nodeName, "test-2", "200m", "1Ki", "example.com/foo:5", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}),
-		makeBasePod(t, nodeName, "test", "100m", "500", "random-invalid-extended-key:100", []v1.ContainerPort{{}}),
+		makeBasePod(t, nodeName, "test-resource-request-and-port-0", "100m", "500", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
+		makeBasePod(t, nodeName, "test-resource-request-and-port-1", "100m", "500", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
+		makeBasePod(t, nodeName, "test-resource-request-and-port-2", "200m", "1Ki", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}),
+		makeBasePod(t, nodeName, "test-nonzero-request", "", "", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
+		makeBasePod(t, nodeName, "test-extended-resource-1", "100m", "500", "example.com/foo:3", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
+		makeBasePod(t, nodeName, "test-extended-resource-2", "200m", "1Ki", "example.com/foo:5", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}),
+		makeBasePod(t, nodeName, "test-extended-key", "100m", "500", "random-invalid-extended-key:100", []v1.ContainerPort{{}}),
 	}
 
 	tests := []struct {
+		name string
 		pods []*v1.Pod
 
 		wNodeInfo *framework.NodeInfo
 	}{{
+		name: "assumed one pod with resource request and used ports",
 		pods: []*v1.Pod{testPods[0]},
 		wNodeInfo: newNodeInfo(
 			&framework.Resource{
@@ -129,6 +132,7 @@ func TestAssumePodScheduled(t *testing.T) {
 			make(map[string]*framework.ImageStateSummary),
 		),
 	}, {
+		name: "node requested resource are equal to the sum of the assumed pods requested resource, node contains host ports defined by pods",
 		pods: []*v1.Pod{testPods[1], testPods[2]},
 		wNodeInfo: newNodeInfo(
 			&framework.Resource{
@@ -144,6 +148,7 @@ func TestAssumePodScheduled(t *testing.T) {
 			make(map[string]*framework.ImageStateSummary),
 		),
 	}, { // test non-zero request
+		name: "assumed pod without resource request",
 		pods: []*v1.Pod{testPods[3]},
 		wNodeInfo: newNodeInfo(
 			&framework.Resource{
@@ -159,6 +164,7 @@ func TestAssumePodScheduled(t *testing.T) {
 			make(map[string]*framework.ImageStateSummary),
 		),
 	}, {
+		name: "assumed one pod with extended resource",
 		pods: []*v1.Pod{testPods[4]},
 		wNodeInfo: newNodeInfo(
 			&framework.Resource{
@@ -175,6 +181,7 @@ func TestAssumePodScheduled(t *testing.T) {
 			make(map[string]*framework.ImageStateSummary),
 		),
 	}, {
+		name: "assumed two pods with extended resources",
 		pods: []*v1.Pod{testPods[4], testPods[5]},
 		wNodeInfo: newNodeInfo(
 			&framework.Resource{
@@ -191,6 +198,7 @@ func TestAssumePodScheduled(t *testing.T) {
 			make(map[string]*framework.ImageStateSummary),
 		),
 	}, {
+		name: "assumed pod with random invalid extended resource key",
 		pods: []*v1.Pod{testPods[6]},
 		wNodeInfo: newNodeInfo(
 			&framework.Resource{
@@ -208,13 +216,13 @@ func TestAssumePodScheduled(t *testing.T) {
 	},
 	}
 
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			logger, ctx := ktesting.NewTestContext(t)
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			cache := newCache(ctx, time.Second, time.Second)
-			for _, pod := range tt.pods {
+			for _, pod := range tc.pods {
 				if err := cache.AssumePod(logger, pod); err != nil {
 					t.Fatalf("AssumePod failed: %v", err)
 				}
@@ -224,11 +232,11 @@ func TestAssumePodScheduled(t *testing.T) {
 				}
 			}
 			n := cache.nodes[nodeName]
-			if err := deepEqualWithoutGeneration(n, tt.wNodeInfo); err != nil {
+			if err := deepEqualWithoutGeneration(n, tc.wNodeInfo); err != nil {
 				t.Error(err)
 			}
 
-			for _, pod := range tt.pods {
+			for _, pod := range tc.pods {
 				if err := cache.ForgetPod(logger, pod); err != nil {
 					t.Fatalf("ForgetPod failed: %v", err)
 				}
@@ -367,12 +375,12 @@ func TestAddPodWillConfirm(t *testing.T) {
 		makeBasePod(t, nodeName, "test-1", "100m", "500", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
 		makeBasePod(t, nodeName, "test-2", "200m", "1Ki", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}),
 	}
-	tests := []struct {
+	test := struct {
 		podsToAssume []*v1.Pod
 		podsToAdd    []*v1.Pod
 
 		wNodeInfo *framework.NodeInfo
-	}{{ // two pod were assumed at same time. But first one is called Add() and gets confirmed.
+	}{ // two pod were assumed at same time. But first one is called Add() and gets confirmed.
 		podsToAssume: []*v1.Pod{testPods[0], testPods[1]},
 		podsToAdd:    []*v1.Pod{testPods[0]},
 		wNodeInfo: newNodeInfo(
@@ -388,35 +396,31 @@ func TestAddPodWillConfirm(t *testing.T) {
 			newHostPortInfoBuilder().add("TCP", "127.0.0.1", 80).build(),
 			make(map[string]*framework.ImageStateSummary),
 		),
-	}}
+	}
 
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			logger, ctx := ktesting.NewTestContext(t)
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			cache := newCache(ctx, ttl, time.Second)
-			for _, podToAssume := range tt.podsToAssume {
-				if err := assumeAndFinishBinding(logger, cache, podToAssume, now); err != nil {
-					t.Fatalf("assumePod failed: %v", err)
-				}
-			}
-			for _, podToAdd := range tt.podsToAdd {
-				if err := cache.AddPod(logger, podToAdd); err != nil {
-					t.Fatalf("AddPod failed: %v", err)
-				}
-				// pod already in added state
-				if err := cache.AddPod(logger, podToAdd); err == nil {
-					t.Error("expected error, no error found")
-				}
-			}
-			cache.cleanupAssumedPods(logger, now.Add(2*ttl))
-			// check after expiration. confirmed pods shouldn't be expired.
-			n := cache.nodes[nodeName]
-			if err := deepEqualWithoutGeneration(n, tt.wNodeInfo); err != nil {
-				t.Error(err)
-			}
-		})
+	logger, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cache := newCache(ctx, ttl, time.Second)
+	for _, podToAssume := range test.podsToAssume {
+		if err := assumeAndFinishBinding(logger, cache, podToAssume, now); err != nil {
+			t.Fatalf("assumePod failed: %v", err)
+		}
+	}
+	for _, podToAdd := range test.podsToAdd {
+		if err := cache.AddPod(logger, podToAdd); err != nil {
+			t.Fatalf("AddPod failed: %v", err)
+		}
+		// pod already in added state
+		if err := cache.AddPod(logger, podToAdd); err == nil {
+			t.Error("expected error, no error found")
+		}
+	}
+	cache.cleanupAssumedPods(logger, now.Add(2*ttl))
+	// check after expiration. confirmed pods shouldn't be expired.
+	n := cache.nodes[nodeName]
+	if err := deepEqualWithoutGeneration(n, test.wNodeInfo); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -429,46 +433,43 @@ func TestDump(t *testing.T) {
 		makeBasePod(t, nodeName, "test-1", "100m", "500", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
 		makeBasePod(t, nodeName, "test-2", "200m", "1Ki", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
 	}
-	tests := []struct {
+	test := struct {
 		podsToAssume []*v1.Pod
 		podsToAdd    []*v1.Pod
-	}{{ // two pod were assumed at same time. But first one is called Add() and gets confirmed.
+	}{ // two pod were assumed at same time. But first one is called Add() and gets confirmed.
 		podsToAssume: []*v1.Pod{testPods[0], testPods[1]},
 		podsToAdd:    []*v1.Pod{testPods[0]},
-	}}
-
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			logger, ctx := ktesting.NewTestContext(t)
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			cache := newCache(ctx, ttl, time.Second)
-			for _, podToAssume := range tt.podsToAssume {
-				if err := assumeAndFinishBinding(logger, cache, podToAssume, now); err != nil {
-					t.Errorf("assumePod failed: %v", err)
-				}
-			}
-			for _, podToAdd := range tt.podsToAdd {
-				if err := cache.AddPod(logger, podToAdd); err != nil {
-					t.Errorf("AddPod failed: %v", err)
-				}
-			}
-
-			snapshot := cache.Dump()
-			if len(snapshot.Nodes) != len(cache.nodes) {
-				t.Errorf("Unequal number of nodes in the cache and its snapshot. expected: %v, got: %v", len(cache.nodes), len(snapshot.Nodes))
-			}
-			for name, ni := range snapshot.Nodes {
-				nItem := cache.nodes[name]
-				if !reflect.DeepEqual(ni, nItem.info) {
-					t.Errorf("expect \n%+v; got \n%+v", nItem.info, ni)
-				}
-			}
-			if !reflect.DeepEqual(snapshot.AssumedPods, cache.assumedPods) {
-				t.Errorf("expect \n%+v; got \n%+v", cache.assumedPods, snapshot.AssumedPods)
-			}
-		})
 	}
+
+	logger, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cache := newCache(ctx, ttl, time.Second)
+	for _, podToAssume := range test.podsToAssume {
+		if err := assumeAndFinishBinding(logger, cache, podToAssume, now); err != nil {
+			t.Errorf("assumePod failed: %v", err)
+		}
+	}
+	for _, podToAdd := range test.podsToAdd {
+		if err := cache.AddPod(logger, podToAdd); err != nil {
+			t.Errorf("AddPod failed: %v", err)
+		}
+	}
+
+	snapshot := cache.Dump()
+	if len(snapshot.Nodes) != len(cache.nodes) {
+		t.Errorf("Unequal number of nodes in the cache and its snapshot. expected: %v, got: %v", len(cache.nodes), len(snapshot.Nodes))
+	}
+	for name, ni := range snapshot.Nodes {
+		nItem := cache.nodes[name]
+		if diff := cmp.Diff(nItem.info, ni, cmp.AllowUnexported(framework.NodeInfo{})); diff != "" {
+			t.Errorf("Unexpected node info (-want,+got):\n%s", diff)
+		}
+	}
+	if diff := cmp.Diff(cache.assumedPods, snapshot.AssumedPods); diff != "" {
+		t.Errorf("Unexpected assumedPods (-want,+got):\n%s", diff)
+	}
+
 }
 
 // TestAddPodAlwaysUpdatePodInfoInNodeInfo tests that AddPod method always updates PodInfo in NodeInfo,
@@ -487,52 +488,46 @@ func TestAddPodAlwaysUpdatesPodInfoInNodeInfo(t *testing.T) {
 		Status: v1.ConditionTrue,
 	})
 
-	tests := []struct {
+	test := struct {
 		podsToAssume         []*v1.Pod
 		podsToAddAfterAssume []*v1.Pod
 		nodeInfo             map[string]*framework.NodeInfo
 	}{
-		{
-			podsToAssume:         []*v1.Pod{p1},
-			podsToAddAfterAssume: []*v1.Pod{p2},
-			nodeInfo: map[string]*framework.NodeInfo{
-				"node1": newNodeInfo(
-					&framework.Resource{
-						MilliCPU: 100,
-						Memory:   500,
-					},
-					&framework.Resource{
-						MilliCPU: 100,
-						Memory:   500,
-					},
-					[]*v1.Pod{p2},
-					newHostPortInfoBuilder().add("TCP", "0.0.0.0", 80).build(),
-					make(map[string]*framework.ImageStateSummary),
-				),
-			},
+		podsToAssume:         []*v1.Pod{p1},
+		podsToAddAfterAssume: []*v1.Pod{p2},
+		nodeInfo: map[string]*framework.NodeInfo{
+			"node1": newNodeInfo(
+				&framework.Resource{
+					MilliCPU: 100,
+					Memory:   500,
+				},
+				&framework.Resource{
+					MilliCPU: 100,
+					Memory:   500,
+				},
+				[]*v1.Pod{p2},
+				newHostPortInfoBuilder().add("TCP", "0.0.0.0", 80).build(),
+				make(map[string]*framework.ImageStateSummary),
+			),
 		},
 	}
 
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			cache := newCache(ctx, ttl, time.Second)
-			for _, podToAssume := range tt.podsToAssume {
-				if err := assumeAndFinishBinding(logger, cache, podToAssume, now); err != nil {
-					t.Fatalf("assumePod failed: %v", err)
-				}
-			}
-			for _, podToAdd := range tt.podsToAddAfterAssume {
-				if err := cache.AddPod(logger, podToAdd); err != nil {
-					t.Fatalf("AddPod failed: %v", err)
-				}
-			}
-			for nodeName, expected := range tt.nodeInfo {
-				n := cache.nodes[nodeName]
-				if err := deepEqualWithoutGeneration(n, expected); err != nil {
-					t.Errorf("node %q: %v", nodeName, err)
-				}
-			}
-		})
+	cache := newCache(ctx, ttl, time.Second)
+	for _, podToAssume := range test.podsToAssume {
+		if err := assumeAndFinishBinding(logger, cache, podToAssume, now); err != nil {
+			t.Fatalf("assumePod failed: %v", err)
+		}
+	}
+	for _, podToAdd := range test.podsToAddAfterAssume {
+		if err := cache.AddPod(logger, podToAdd); err != nil {
+			t.Fatalf("AddPod failed: %v", err)
+		}
+	}
+	for nodeName, expected := range test.nodeInfo {
+		n := cache.nodes[nodeName]
+		if err := deepEqualWithoutGeneration(n, expected); err != nil {
+			t.Errorf("node %q: %v", nodeName, err)
+		}
 	}
 }
 
@@ -545,13 +540,13 @@ func TestAddPodWillReplaceAssumed(t *testing.T) {
 	addedPod := makeBasePod(t, "actual-node", "test-1", "100m", "500", "", []v1.ContainerPort{{HostPort: 80}})
 	updatedPod := makeBasePod(t, "actual-node", "test-1", "200m", "500", "", []v1.ContainerPort{{HostPort: 90}})
 
-	tests := []struct {
+	test := struct {
 		podsToAssume []*v1.Pod
 		podsToAdd    []*v1.Pod
 		podsToUpdate [][]*v1.Pod
 
 		wNodeInfo map[string]*framework.NodeInfo
-	}{{
+	}{
 		podsToAssume: []*v1.Pod{assumedPod.DeepCopy()},
 		podsToAdd:    []*v1.Pod{addedPod.DeepCopy()},
 		podsToUpdate: [][]*v1.Pod{{addedPod.DeepCopy(), updatedPod.DeepCopy()}},
@@ -571,36 +566,32 @@ func TestAddPodWillReplaceAssumed(t *testing.T) {
 				make(map[string]*framework.ImageStateSummary),
 			),
 		},
-	}}
+	}
 
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			logger, ctx := ktesting.NewTestContext(t)
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			cache := newCache(ctx, ttl, time.Second)
-			for _, podToAssume := range tt.podsToAssume {
-				if err := assumeAndFinishBinding(logger, cache, podToAssume, now); err != nil {
-					t.Fatalf("assumePod failed: %v", err)
-				}
-			}
-			for _, podToAdd := range tt.podsToAdd {
-				if err := cache.AddPod(logger, podToAdd); err != nil {
-					t.Fatalf("AddPod failed: %v", err)
-				}
-			}
-			for _, podToUpdate := range tt.podsToUpdate {
-				if err := cache.UpdatePod(logger, podToUpdate[0], podToUpdate[1]); err != nil {
-					t.Fatalf("UpdatePod failed: %v", err)
-				}
-			}
-			for nodeName, expected := range tt.wNodeInfo {
-				n := cache.nodes[nodeName]
-				if err := deepEqualWithoutGeneration(n, expected); err != nil {
-					t.Errorf("node %q: %v", nodeName, err)
-				}
-			}
-		})
+	logger, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cache := newCache(ctx, ttl, time.Second)
+	for _, podToAssume := range test.podsToAssume {
+		if err := assumeAndFinishBinding(logger, cache, podToAssume, now); err != nil {
+			t.Fatalf("assumePod failed: %v", err)
+		}
+	}
+	for _, podToAdd := range test.podsToAdd {
+		if err := cache.AddPod(logger, podToAdd); err != nil {
+			t.Fatalf("AddPod failed: %v", err)
+		}
+	}
+	for _, podToUpdate := range test.podsToUpdate {
+		if err := cache.UpdatePod(logger, podToUpdate[0], podToUpdate[1]); err != nil {
+			t.Fatalf("UpdatePod failed: %v", err)
+		}
+	}
+	for nodeName, expected := range test.wNodeInfo {
+		n := cache.nodes[nodeName]
+		if err := deepEqualWithoutGeneration(n, expected); err != nil {
+			t.Errorf("node %q: %v", nodeName, err)
+		}
 	}
 }
 
@@ -609,11 +600,10 @@ func TestAddPodAfterExpiration(t *testing.T) {
 	nodeName := "node"
 	ttl := 10 * time.Second
 	basePod := makeBasePod(t, nodeName, "test", "100m", "500", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}})
-	tests := []struct {
-		pod *v1.Pod
-
+	test := struct {
+		pod       *v1.Pod
 		wNodeInfo *framework.NodeInfo
-	}{{
+	}{
 		pod: basePod,
 		wNodeInfo: newNodeInfo(
 			&framework.Resource{
@@ -628,32 +618,28 @@ func TestAddPodAfterExpiration(t *testing.T) {
 			newHostPortInfoBuilder().add("TCP", "127.0.0.1", 80).build(),
 			make(map[string]*framework.ImageStateSummary),
 		),
-	}}
+	}
 
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			logger, ctx := ktesting.NewTestContext(t)
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			now := time.Now()
-			cache := newCache(ctx, ttl, time.Second)
-			if err := assumeAndFinishBinding(logger, cache, tt.pod, now); err != nil {
-				t.Fatalf("assumePod failed: %v", err)
-			}
-			cache.cleanupAssumedPods(logger, now.Add(2*ttl))
-			// It should be expired and removed.
-			if err := isForgottenFromCache(tt.pod, cache); err != nil {
-				t.Error(err)
-			}
-			if err := cache.AddPod(logger, tt.pod); err != nil {
-				t.Fatalf("AddPod failed: %v", err)
-			}
-			// check after expiration. confirmed pods shouldn't be expired.
-			n := cache.nodes[nodeName]
-			if err := deepEqualWithoutGeneration(n, tt.wNodeInfo); err != nil {
-				t.Error(err)
-			}
-		})
+	logger, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	now := time.Now()
+	cache := newCache(ctx, ttl, time.Second)
+	if err := assumeAndFinishBinding(logger, cache, test.pod, now); err != nil {
+		t.Fatalf("assumePod failed: %v", err)
+	}
+	cache.cleanupAssumedPods(logger, now.Add(2*ttl))
+	// It should be expired and removed.
+	if err := isForgottenFromCache(test.pod, cache); err != nil {
+		t.Error(err)
+	}
+	if err := cache.AddPod(logger, test.pod); err != nil {
+		t.Fatalf("AddPod failed: %v", err)
+	}
+	// check after expiration. confirmed pods shouldn't be expired.
+	n := cache.nodes[nodeName]
+	if err := deepEqualWithoutGeneration(n, test.wNodeInfo); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -665,12 +651,12 @@ func TestUpdatePod(t *testing.T) {
 		makeBasePod(t, nodeName, "test", "100m", "500", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
 		makeBasePod(t, nodeName, "test", "200m", "1Ki", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}),
 	}
-	tests := []struct {
+	test := struct {
 		podsToAdd    []*v1.Pod
 		podsToUpdate []*v1.Pod
 
 		wNodeInfo []*framework.NodeInfo
-	}{{ // add a pod and then update it twice
+	}{ // add a pod and then update it twice
 		podsToAdd:    []*v1.Pod{testPods[0]},
 		podsToUpdate: []*v1.Pod{testPods[0], testPods[1], testPods[0]},
 		wNodeInfo: []*framework.NodeInfo{newNodeInfo(
@@ -698,34 +684,30 @@ func TestUpdatePod(t *testing.T) {
 			newHostPortInfoBuilder().add("TCP", "127.0.0.1", 80).build(),
 			make(map[string]*framework.ImageStateSummary),
 		)},
-	}}
+	}
 
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			logger, ctx := ktesting.NewTestContext(t)
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			cache := newCache(ctx, ttl, time.Second)
-			for _, podToAdd := range tt.podsToAdd {
-				if err := cache.AddPod(logger, podToAdd); err != nil {
-					t.Fatalf("AddPod failed: %v", err)
-				}
-			}
+	logger, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cache := newCache(ctx, ttl, time.Second)
+	for _, podToAdd := range test.podsToAdd {
+		if err := cache.AddPod(logger, podToAdd); err != nil {
+			t.Fatalf("AddPod failed: %v", err)
+		}
+	}
 
-			for j := range tt.podsToUpdate {
-				if j == 0 {
-					continue
-				}
-				if err := cache.UpdatePod(logger, tt.podsToUpdate[j-1], tt.podsToUpdate[j]); err != nil {
-					t.Fatalf("UpdatePod failed: %v", err)
-				}
-				// check after expiration. confirmed pods shouldn't be expired.
-				n := cache.nodes[nodeName]
-				if err := deepEqualWithoutGeneration(n, tt.wNodeInfo[j-1]); err != nil {
-					t.Errorf("update %d: %v", j, err)
-				}
-			}
-		})
+	for j := range test.podsToUpdate {
+		if j == 0 {
+			continue
+		}
+		if err := cache.UpdatePod(logger, test.podsToUpdate[j-1], test.podsToUpdate[j]); err != nil {
+			t.Fatalf("UpdatePod failed: %v", err)
+		}
+		// check after expiration. confirmed pods shouldn't be expired.
+		n := cache.nodes[nodeName]
+		if err := deepEqualWithoutGeneration(n, test.wNodeInfo[j-1]); err != nil {
+			t.Errorf("update %d: %v", j, err)
+		}
 	}
 }
 
@@ -738,16 +720,15 @@ func TestUpdatePodAndGet(t *testing.T) {
 		makeBasePod(t, nodeName, "test", "200m", "1Ki", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}),
 	}
 	tests := []struct {
-		pod *v1.Pod
-
+		name        string
+		pod         *v1.Pod
 		podToUpdate *v1.Pod
 		handler     func(logger klog.Logger, cache Cache, pod *v1.Pod) error
-
-		assumePod bool
+		assumePod   bool
 	}{
 		{
-			pod: testPods[0],
-
+			name:        "do not update pod when pod information has not changed",
+			pod:         testPods[0],
 			podToUpdate: testPods[0],
 			handler: func(logger klog.Logger, cache Cache, pod *v1.Pod) error {
 				return cache.AssumePod(logger, pod)
@@ -755,8 +736,8 @@ func TestUpdatePodAndGet(t *testing.T) {
 			assumePod: true,
 		},
 		{
-			pod: testPods[0],
-
+			name:        "update  pod when pod information changed",
+			pod:         testPods[0],
 			podToUpdate: testPods[1],
 			handler: func(logger klog.Logger, cache Cache, pod *v1.Pod) error {
 				return cache.AddPod(logger, pod)
@@ -765,40 +746,40 @@ func TestUpdatePodAndGet(t *testing.T) {
 		},
 	}
 
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			logger, ctx := ktesting.NewTestContext(t)
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			cache := newCache(ctx, ttl, time.Second)
 			// trying to get an unknown pod should return an error
 			// podToUpdate has not been added yet
-			if _, err := cache.GetPod(tt.podToUpdate); err == nil {
+			if _, err := cache.GetPod(tc.podToUpdate); err == nil {
 				t.Error("expected error, no error found")
 			}
 
 			// trying to update an unknown pod should return an error
 			// pod has not been added yet
-			if err := cache.UpdatePod(logger, tt.pod, tt.podToUpdate); err == nil {
+			if err := cache.UpdatePod(logger, tc.pod, tc.podToUpdate); err == nil {
 				t.Error("expected error, no error found")
 			}
 
-			if err := tt.handler(logger, cache, tt.pod); err != nil {
+			if err := tc.handler(logger, cache, tc.pod); err != nil {
 				t.Fatalf("unexpected err: %v", err)
 			}
 
-			if !tt.assumePod {
-				if err := cache.UpdatePod(logger, tt.pod, tt.podToUpdate); err != nil {
+			if !tc.assumePod {
+				if err := cache.UpdatePod(logger, tc.pod, tc.podToUpdate); err != nil {
 					t.Fatalf("UpdatePod failed: %v", err)
 				}
 			}
 
-			cachedPod, err := cache.GetPod(tt.pod)
+			cachedPod, err := cache.GetPod(tc.pod)
 			if err != nil {
 				t.Fatalf("GetPod failed: %v", err)
 			}
-			if !reflect.DeepEqual(tt.podToUpdate, cachedPod) {
-				t.Fatalf("pod get=%s, want=%s", cachedPod, tt.podToUpdate)
+			if diff := cmp.Diff(tc.podToUpdate, cachedPod); diff != "" {
+				t.Fatalf("Unexpected pod (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -812,13 +793,13 @@ func TestExpireAddUpdatePod(t *testing.T) {
 		makeBasePod(t, nodeName, "test", "100m", "500", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}),
 		makeBasePod(t, nodeName, "test", "200m", "1Ki", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}),
 	}
-	tests := []struct {
+	test := struct {
 		podsToAssume []*v1.Pod
 		podsToAdd    []*v1.Pod
 		podsToUpdate []*v1.Pod
 
 		wNodeInfo []*framework.NodeInfo
-	}{{ // Pod is assumed, expired, and added. Then it would be updated twice.
+	}{ // Pod is assumed, expired, and added. Then it would be updated twice.
 		podsToAssume: []*v1.Pod{testPods[0]},
 		podsToAdd:    []*v1.Pod{testPods[0]},
 		podsToUpdate: []*v1.Pod{testPods[0], testPods[1], testPods[0]},
@@ -847,42 +828,38 @@ func TestExpireAddUpdatePod(t *testing.T) {
 			newHostPortInfoBuilder().add("TCP", "127.0.0.1", 80).build(),
 			make(map[string]*framework.ImageStateSummary),
 		)},
-	}}
+	}
 
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			logger, ctx := ktesting.NewTestContext(t)
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			now := time.Now()
-			cache := newCache(ctx, ttl, time.Second)
-			for _, podToAssume := range tt.podsToAssume {
-				if err := assumeAndFinishBinding(logger, cache, podToAssume, now); err != nil {
-					t.Fatalf("assumePod failed: %v", err)
-				}
-			}
-			cache.cleanupAssumedPods(logger, now.Add(2*ttl))
+	logger, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	now := time.Now()
+	cache := newCache(ctx, ttl, time.Second)
+	for _, podToAssume := range test.podsToAssume {
+		if err := assumeAndFinishBinding(logger, cache, podToAssume, now); err != nil {
+			t.Fatalf("assumePod failed: %v", err)
+		}
+	}
+	cache.cleanupAssumedPods(logger, now.Add(2*ttl))
 
-			for _, podToAdd := range tt.podsToAdd {
-				if err := cache.AddPod(logger, podToAdd); err != nil {
-					t.Fatalf("AddPod failed: %v", err)
-				}
-			}
+	for _, podToAdd := range test.podsToAdd {
+		if err := cache.AddPod(logger, podToAdd); err != nil {
+			t.Fatalf("AddPod failed: %v", err)
+		}
+	}
 
-			for j := range tt.podsToUpdate {
-				if j == 0 {
-					continue
-				}
-				if err := cache.UpdatePod(logger, tt.podsToUpdate[j-1], tt.podsToUpdate[j]); err != nil {
-					t.Fatalf("UpdatePod failed: %v", err)
-				}
-				// check after expiration. confirmed pods shouldn't be expired.
-				n := cache.nodes[nodeName]
-				if err := deepEqualWithoutGeneration(n, tt.wNodeInfo[j-1]); err != nil {
-					t.Errorf("update %d: %v", j, err)
-				}
-			}
-		})
+	for j := range test.podsToUpdate {
+		if j == 0 {
+			continue
+		}
+		if err := cache.UpdatePod(logger, test.podsToUpdate[j-1], test.podsToUpdate[j]); err != nil {
+			t.Fatalf("UpdatePod failed: %v", err)
+		}
+		// check after expiration. confirmed pods shouldn't be expired.
+		n := cache.nodes[nodeName]
+		if err := deepEqualWithoutGeneration(n, test.wNodeInfo[j-1]); err != nil {
+			t.Errorf("update %d: %v", j, err)
+		}
 	}
 }
 
@@ -897,47 +874,41 @@ func makePodWithEphemeralStorage(nodeName, ephemeralStorage string) *v1.Pod {
 func TestEphemeralStorageResource(t *testing.T) {
 	nodeName := "node"
 	podE := makePodWithEphemeralStorage(nodeName, "500")
-	tests := []struct {
+	test := struct {
 		pod       *v1.Pod
 		wNodeInfo *framework.NodeInfo
 	}{
-		{
-			pod: podE,
-			wNodeInfo: newNodeInfo(
-				&framework.Resource{
-					EphemeralStorage: 500,
-				},
-				&framework.Resource{
-					MilliCPU: schedutil.DefaultMilliCPURequest,
-					Memory:   schedutil.DefaultMemoryRequest,
-				},
-				[]*v1.Pod{podE},
-				framework.HostPortInfo{},
-				make(map[string]*framework.ImageStateSummary),
-			),
-		},
+		pod: podE,
+		wNodeInfo: newNodeInfo(
+			&framework.Resource{
+				EphemeralStorage: 500,
+			},
+			&framework.Resource{
+				MilliCPU: schedutil.DefaultMilliCPURequest,
+				Memory:   schedutil.DefaultMemoryRequest,
+			},
+			[]*v1.Pod{podE},
+			framework.HostPortInfo{},
+			make(map[string]*framework.ImageStateSummary),
+		),
 	}
-	for i, tt := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			logger, ctx := ktesting.NewTestContext(t)
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			cache := newCache(ctx, time.Second, time.Second)
-			if err := cache.AddPod(logger, tt.pod); err != nil {
-				t.Fatalf("AddPod failed: %v", err)
-			}
-			n := cache.nodes[nodeName]
-			if err := deepEqualWithoutGeneration(n, tt.wNodeInfo); err != nil {
-				t.Error(err)
-			}
+	logger, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cache := newCache(ctx, time.Second, time.Second)
+	if err := cache.AddPod(logger, test.pod); err != nil {
+		t.Fatalf("AddPod failed: %v", err)
+	}
+	n := cache.nodes[nodeName]
+	if err := deepEqualWithoutGeneration(n, test.wNodeInfo); err != nil {
+		t.Error(err)
+	}
 
-			if err := cache.RemovePod(logger, tt.pod); err != nil {
-				t.Fatalf("RemovePod failed: %v", err)
-			}
-			if _, err := cache.GetPod(tt.pod); err == nil {
-				t.Errorf("pod was not deleted")
-			}
-		})
+	if err := cache.RemovePod(logger, test.pod); err != nil {
+		t.Fatalf("RemovePod failed: %v", err)
+	}
+	if _, err := cache.GetPod(test.pod); err == nil {
+		t.Errorf("pod was not deleted")
 	}
 }
 
@@ -1066,7 +1037,7 @@ func TestForgetPod(t *testing.T) {
 }
 
 // buildNodeInfo creates a NodeInfo by simulating node operations in cache.
-func buildNodeInfo(node *v1.Node, pods []*v1.Pod) *framework.NodeInfo {
+func buildNodeInfo(node *v1.Node, pods []*v1.Pod, imageStates map[string]*framework.ImageStateSummary) *framework.NodeInfo {
 	expected := framework.NewNodeInfo()
 	expected.SetNode(node)
 	expected.Allocatable = framework.NewResource(node.Status.Allocatable)
@@ -1074,46 +1045,83 @@ func buildNodeInfo(node *v1.Node, pods []*v1.Pod) *framework.NodeInfo {
 	for _, pod := range pods {
 		expected.AddPod(pod)
 	}
+	for _, image := range node.Status.Images {
+		for _, name := range image.Names {
+			if state, ok := imageStates[name]; ok {
+				expected.ImageStates[name] = state
+			}
+		}
+	}
 	return expected
+}
+
+// buildImageStates creates ImageStateSummary of image from nodes that will be added in cache.
+func buildImageStates(nodes []*v1.Node) map[string]*framework.ImageStateSummary {
+	imageStates := make(map[string]*framework.ImageStateSummary)
+	for _, item := range nodes {
+		for _, image := range item.Status.Images {
+			for _, name := range image.Names {
+				if state, ok := imageStates[name]; !ok {
+					state = &framework.ImageStateSummary{
+						Size:  image.SizeBytes,
+						Nodes: sets.New[string](item.Name),
+					}
+					imageStates[name] = state
+				} else {
+					state.Nodes.Insert(item.Name)
+				}
+			}
+		}
+	}
+	return imageStates
 }
 
 // TestNodeOperators tests node operations of cache, including add, update
 // and remove.
 func TestNodeOperators(t *testing.T) {
 	// Test data
-	nodeName := "test-node"
-	cpu1 := resource.MustParse("1000m")
-	mem100m := resource.MustParse("100m")
 	cpuHalf := resource.MustParse("500m")
 	mem50m := resource.MustParse("50m")
-	resourceFooName := "example.com/foo"
-	resourceFoo := resource.MustParse("1")
-
+	resourceList1 := map[v1.ResourceName]string{
+		v1.ResourceCPU:                     "1000m",
+		v1.ResourceMemory:                  "100m",
+		v1.ResourceName("example.com/foo"): "1",
+	}
+	resourceList2 := map[v1.ResourceName]string{
+		v1.ResourceCPU:                     "500m",
+		v1.ResourceMemory:                  "50m",
+		v1.ResourceName("example.com/foo"): "2",
+	}
+	taints := []v1.Taint{
+		{
+			Key:    "test-key",
+			Value:  "test-value",
+			Effect: v1.TaintEffectPreferNoSchedule,
+		},
+	}
+	imageStatus1 := map[string]int64{
+		"gcr.io/80:latest":  80 * mb,
+		"gcr.io/80:v1":      80 * mb,
+		"gcr.io/300:latest": 300 * mb,
+		"gcr.io/300:v1":     300 * mb,
+	}
+	imageStatus2 := map[string]int64{
+		"gcr.io/600:latest": 600 * mb,
+		"gcr.io/80:latest":  80 * mb,
+		"gcr.io/900:latest": 900 * mb,
+	}
 	tests := []struct {
-		node *v1.Node
-		pods []*v1.Pod
+		name  string
+		nodes []*v1.Node
+		pods  []*v1.Pod
 	}{
 		{
-			node: &v1.Node{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: nodeName,
-				},
-				Status: v1.NodeStatus{
-					Allocatable: v1.ResourceList{
-						v1.ResourceCPU:                   cpu1,
-						v1.ResourceMemory:                mem100m,
-						v1.ResourceName(resourceFooName): resourceFoo,
-					},
-				},
-				Spec: v1.NodeSpec{
-					Taints: []v1.Taint{
-						{
-							Key:    "test-key",
-							Value:  "test-value",
-							Effect: v1.TaintEffectPreferNoSchedule,
-						},
-					},
-				},
+			name: "operate the node with one pod",
+			nodes: []*v1.Node{
+				&st.MakeNode().Name("test-node-1").Capacity(resourceList1).Taints(taints).Images(imageStatus1).Node,
+				&st.MakeNode().Name("test-node-2").Capacity(resourceList2).Taints(taints).Images(imageStatus2).Node,
+				&st.MakeNode().Name("test-node-3").Capacity(resourceList1).Taints(taints).Images(imageStatus1).Node,
+				&st.MakeNode().Name("test-node-4").Capacity(resourceList2).Taints(taints).Images(imageStatus2).Node,
 			},
 			pods: []*v1.Pod{
 				{
@@ -1122,7 +1130,7 @@ func TestNodeOperators(t *testing.T) {
 						UID:  types.UID("pod1"),
 					},
 					Spec: v1.PodSpec{
-						NodeName: nodeName,
+						NodeName: "test-node-1",
 						Containers: []v1.Container{
 							{
 								Resources: v1.ResourceRequirements{
@@ -1145,26 +1153,11 @@ func TestNodeOperators(t *testing.T) {
 			},
 		},
 		{
-			node: &v1.Node{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: nodeName,
-				},
-				Status: v1.NodeStatus{
-					Allocatable: v1.ResourceList{
-						v1.ResourceCPU:                   cpu1,
-						v1.ResourceMemory:                mem100m,
-						v1.ResourceName(resourceFooName): resourceFoo,
-					},
-				},
-				Spec: v1.NodeSpec{
-					Taints: []v1.Taint{
-						{
-							Key:    "test-key",
-							Value:  "test-value",
-							Effect: v1.TaintEffectPreferNoSchedule,
-						},
-					},
-				},
+			name: "operate the node with two pods",
+			nodes: []*v1.Node{
+				&st.MakeNode().Name("test-node-1").Capacity(resourceList1).Taints(taints).Images(imageStatus1).Node,
+				&st.MakeNode().Name("test-node-2").Capacity(resourceList2).Taints(taints).Images(imageStatus2).Node,
+				&st.MakeNode().Name("test-node-3").Capacity(resourceList1).Taints(taints).Images(imageStatus1).Node,
 			},
 			pods: []*v1.Pod{
 				{
@@ -1173,7 +1166,7 @@ func TestNodeOperators(t *testing.T) {
 						UID:  types.UID("pod1"),
 					},
 					Spec: v1.PodSpec{
-						NodeName: nodeName,
+						NodeName: "test-node-1",
 						Containers: []v1.Container{
 							{
 								Resources: v1.ResourceRequirements{
@@ -1192,7 +1185,7 @@ func TestNodeOperators(t *testing.T) {
 						UID:  types.UID("pod2"),
 					},
 					Spec: v1.PodSpec{
-						NodeName: nodeName,
+						NodeName: "test-node-1",
 						Containers: []v1.Container{
 							{
 								Resources: v1.ResourceRequirements{
@@ -1209,20 +1202,28 @@ func TestNodeOperators(t *testing.T) {
 		},
 	}
 
-	for i, test := range tests {
-		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			logger, ctx := ktesting.NewTestContext(t)
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
-			expected := buildNodeInfo(test.node, test.pods)
-			node := test.node
+			node := tc.nodes[0]
+
+			imageStates := buildImageStates(tc.nodes)
+			expected := buildNodeInfo(node, tc.pods, imageStates)
 
 			cache := newCache(ctx, time.Second, time.Second)
-			cache.AddNode(logger, node)
-			for _, pod := range test.pods {
+			for _, nodeItem := range tc.nodes {
+				cache.AddNode(logger, nodeItem)
+			}
+			for _, pod := range tc.pods {
 				if err := cache.AddPod(logger, pod); err != nil {
 					t.Fatal(err)
 				}
+			}
+			nodes := map[string]*framework.NodeInfo{}
+			for nodeItem := cache.headNode; nodeItem != nil; nodeItem = nodeItem.next {
+				nodes[nodeItem.info.Node().Name] = nodeItem.info
 			}
 
 			// Step 1: the node was added into cache successfully.
@@ -1234,14 +1235,20 @@ func TestNodeOperators(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cache.nodeTree.numNodes != 1 || nodesList[len(nodesList)-1] != node.Name {
-				t.Errorf("cache.nodeTree is not updated correctly after adding node: %v", node.Name)
+			if cache.nodeTree.numNodes != len(tc.nodes) || len(nodesList) != len(tc.nodes) {
+				t.Errorf("cache.nodeTree is not updated correctly after adding node got: %d, expected: %d",
+					cache.nodeTree.numNodes, len(tc.nodes))
 			}
 
 			// Generations are globally unique. We check in our unit tests that they are incremented correctly.
 			expected.Generation = got.info.Generation
-			if !reflect.DeepEqual(got.info, expected) {
-				t.Errorf("Failed to add node into scheduler cache:\n got: %+v \nexpected: %+v", got, expected)
+			if diff := cmp.Diff(expected, got.info, cmp.AllowUnexported(framework.NodeInfo{})); diff != "" {
+				t.Errorf("Failed to add node into scheduler cache (-want,+got):\n%s", diff)
+			}
+
+			// check imageState of NodeInfo with specific image when node added
+			if !checkImageStateSummary(nodes, "gcr.io/80:latest", "gcr.io/300:latest") {
+				t.Error("image have different ImageStateSummary")
 			}
 
 			// Step 2: dump cached nodes successfully.
@@ -1250,12 +1257,16 @@ func TestNodeOperators(t *testing.T) {
 				t.Error(err)
 			}
 			newNode, found := cachedNodes.nodeInfoMap[node.Name]
-			if !found || len(cachedNodes.nodeInfoMap) != 1 {
-				t.Errorf("failed to dump cached nodes:\n got: %v \nexpected: %v", cachedNodes, cache.nodes)
+			if !found || len(cachedNodes.nodeInfoMap) != len(tc.nodes) {
+				t.Errorf("failed to dump cached nodes:\n got: %v \nexpected: %v", cachedNodes.nodeInfoMap, tc.nodes)
 			}
 			expected.Generation = newNode.Generation
-			if !reflect.DeepEqual(newNode, expected) {
-				t.Errorf("Failed to clone node:\n got: %+v, \n expected: %+v", newNode, expected)
+			if diff := cmp.Diff(newNode, expected.Snapshot(), cmp.AllowUnexported(framework.NodeInfo{})); diff != "" {
+				t.Errorf("Failed to clone node:\n%s", diff)
+			}
+			// check imageState of NodeInfo with specific image when update snapshot
+			if !checkImageStateSummary(cachedNodes.nodeInfoMap, "gcr.io/80:latest", "gcr.io/300:latest") {
+				t.Error("image have different ImageStateSummary")
 			}
 
 			// Step 3: update node attribute successfully.
@@ -1272,16 +1283,20 @@ func TestNodeOperators(t *testing.T) {
 			}
 			expected.Generation = got.info.Generation
 
-			if !reflect.DeepEqual(got.info, expected) {
-				t.Errorf("Failed to update node in schedulertypes:\n got: %+v \nexpected: %+v", got, expected)
+			if diff := cmp.Diff(expected, got.info, cmp.AllowUnexported(framework.NodeInfo{})); diff != "" {
+				t.Errorf("Unexpected schedulertypes after updating node (-want, +got):\n%s", diff)
+			}
+			// check imageState of NodeInfo with specific image when update node
+			if !checkImageStateSummary(nodes, "gcr.io/80:latest", "gcr.io/300:latest") {
+				t.Error("image have different ImageStateSummary")
 			}
 			// Check nodeTree after update
 			nodesList, err = cache.nodeTree.list()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cache.nodeTree.numNodes != 1 || nodesList[len(nodesList)-1] != node.Name {
-				t.Errorf("unexpected cache.nodeTree after updating node: %v", node.Name)
+			if cache.nodeTree.numNodes != len(tc.nodes) || len(nodesList) != len(tc.nodes) {
+				t.Errorf("unexpected cache.nodeTree after updating node")
 			}
 
 			// Step 4: the node can be removed even if it still has pods.
@@ -1304,18 +1319,22 @@ func TestNodeOperators(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cache.nodeTree.numNodes != 0 || len(nodesList) != 0 {
+			if cache.nodeTree.numNodes != len(tc.nodes)-1 || len(nodesList) != len(tc.nodes)-1 {
 				t.Errorf("unexpected cache.nodeTree after removing node: %v", node.Name)
 			}
+			// check imageState of NodeInfo with specific image when delete node
+			if !checkImageStateSummary(nodes, "gcr.io/80:latest", "gcr.io/300:latest") {
+				t.Error("image have different ImageStateSummary after removing node")
+			}
 			// Pods are still in the pods cache.
-			for _, p := range test.pods {
+			for _, p := range tc.pods {
 				if _, err := cache.GetPod(p); err != nil {
 					t.Error(err)
 				}
 			}
 
 			// Step 5: removing pods for the removed node still succeeds.
-			for _, p := range test.pods {
+			for _, p := range tc.pods {
 				if err := cache.RemovePod(logger, p); err != nil {
 					t.Error(err)
 				}
@@ -1741,8 +1760,8 @@ func compareCacheWithNodeInfoSnapshot(t *testing.T, cache *cacheImpl, snapshot *
 		if want.Node() == nil {
 			want = nil
 		}
-		if !reflect.DeepEqual(snapshot.nodeInfoMap[name], want) {
-			return fmt.Errorf("unexpected node info for node %q.Expected:\n%v, got:\n%v", name, ni.info, snapshot.nodeInfoMap[name])
+		if diff := cmp.Diff(want, snapshot.nodeInfoMap[name], cmp.AllowUnexported(framework.NodeInfo{})); diff != "" {
+			return fmt.Errorf("Unexpected node info for node (-want, +got):\n%s", diff)
 		}
 	}
 
@@ -1936,8 +1955,8 @@ func TestSchedulerCache_updateNodeInfoSnapshotList(t *testing.T) {
 			for i, nodeInfo := range snapshot.nodeInfoList {
 				nodeNames[i] = nodeInfo.Node().Name
 			}
-			if !reflect.DeepEqual(nodeNames, test.expected) {
-				t.Errorf("The nodeInfoList is incorrect. Expected %v , got %v", test.expected, nodeNames)
+			if diff := cmp.Diff(test.expected, nodeNames); diff != "" {
+				t.Errorf("Unexpected nodeInfoList (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -2000,6 +2019,28 @@ func makeBasePod(t testingMode, nodeName, objName, cpu, mem, extended string, po
 		st.MakeContainer().Name("container").Image("pause").Resources(req).ContainerPort(ports).Obj(),
 	})
 	return podWrapper.Obj()
+}
+
+// checkImageStateSummary collect ImageStateSummary of image traverse nodes,
+// the collected ImageStateSummary should be equal
+func checkImageStateSummary(nodes map[string]*framework.NodeInfo, imageNames ...string) bool {
+	for _, imageName := range imageNames {
+		var imageState *framework.ImageStateSummary
+		for _, node := range nodes {
+			state, ok := node.ImageStates[imageName]
+			if !ok {
+				continue
+			}
+			if imageState == nil {
+				imageState = state
+				continue
+			}
+			if diff := cmp.Diff(imageState, state); diff != "" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func setupCacheOf1kNodes30kPods(b *testing.B) Cache {

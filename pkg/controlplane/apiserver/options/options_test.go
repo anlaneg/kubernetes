@@ -54,7 +54,6 @@ func TestAddFlags(t *testing.T) {
 		"--admission-control-config-file=/admission-control-config",
 		"--advertise-address=192.168.10.10",
 		"--anonymous-auth=false",
-		"--apiserver-count=5",
 		"--audit-log-maxage=11",
 		"--audit-log-maxbackup=12",
 		"--audit-log-maxsize=13",
@@ -114,7 +113,6 @@ func TestAddFlags(t *testing.T) {
 
 	// This is a snapshot of expected options parsed by args.
 	expected := &Options{
-		MasterCount: 5,
 		GenericServerRunOptions: &apiserveroptions.ServerRunOptions{
 			AdvertiseAddress:            netutils.ParseIPSloppy("192.168.10.10"),
 			CorsAllowedOriginList:       []string{"10.10.10.100", "10.10.10.200"},
@@ -145,7 +143,6 @@ func TestAddFlags(t *testing.T) {
 					CertFile:       "/var/run/kubernetes/etcdce.crt",
 					TracerProvider: oteltrace.NewNoopTracerProvider(),
 				},
-				Paging:                true,
 				Prefix:                "/registry",
 				CompactionInterval:    storagebackend.DefaultCompactInterval,
 				CountMetricPollPeriod: time.Minute,
@@ -245,11 +242,8 @@ func TestAddFlags(t *testing.T) {
 				RetryBackoff: apiserveroptions.DefaultAuthWebhookRetryBackoff(),
 			},
 			BootstrapToken: &kubeoptions.BootstrapTokenAuthenticationOptions{},
-			OIDC: &kubeoptions.OIDCAuthenticationOptions{
-				UsernameClaim: "sub",
-				SigningAlgs:   []string{"RS256"},
-			},
-			RequestHeader: &apiserveroptions.RequestHeaderAuthenticationOptions{},
+			OIDC:           s.Authentication.OIDC,
+			RequestHeader:  &apiserveroptions.RequestHeaderAuthenticationOptions{},
 			ServiceAccounts: &kubeoptions.ServiceAccountAuthenticationOptions{
 				Lookup:           true,
 				ExtendExpiration: true,
@@ -285,7 +279,16 @@ func TestAddFlags(t *testing.T) {
 		AggregatorRejectForwardingRedirects: true,
 	}
 
+	expected.Authentication.OIDC.UsernameClaim = "sub"
+	expected.Authentication.OIDC.SigningAlgs = []string{"RS256"}
+
+	if !s.Authorization.AreLegacyFlagsSet() {
+		t.Errorf("expected legacy authorization flags to be set")
+	}
+	// setting the method to nil since methods can't be compared with reflect.DeepEqual
+	s.Authorization.AreLegacyFlagsSet = nil
+
 	if !reflect.DeepEqual(expected, s) {
-		t.Errorf("Got different run options than expected.\nDifference detected on:\n%s", cmp.Diff(expected, s, cmpopts.IgnoreUnexported(admission.Plugins{})))
+		t.Errorf("Got different run options than expected.\nDifference detected on:\n%s", cmp.Diff(expected, s, cmpopts.IgnoreUnexported(admission.Plugins{}, kubeoptions.OIDCAuthenticationOptions{})))
 	}
 }

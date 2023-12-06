@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	peerreconcilers "k8s.io/apiserver/pkg/reconcilers"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/client-go/util/keyutil"
@@ -41,6 +42,8 @@ import (
 	"k8s.io/kubernetes/pkg/serviceaccount"
 )
 
+// Options define the flags and validation for a generic controlplane. If the
+// structs are nil, the options are not added to the command line and not validated.
 type Options struct {
 	GenericServerRunOptions *genericoptions.ServerRunOptions
 	Etcd                    *genericoptions.EtcdOptions
@@ -63,10 +66,18 @@ type Options struct {
 	ProxyClientCertFile string
 	ProxyClientKeyFile  string
 
+	// PeerCAFile is the ca bundle used by this kube-apiserver to verify peer apiservers'
+	// serving certs when routing a request to the peer in the case the request can not be served
+	// locally due to version skew.
+	PeerCAFile string
+
+	// PeerAdvertiseAddress is the IP for this kube-apiserver which is used by peer apiservers to route a request
+	// to this apiserver. This happens in cases where the peer is not able to serve the request due to
+	// version skew.
+	PeerAdvertiseAddress peerreconcilers.PeerAdvertiseAddress
+
 	EnableAggregatorRouting             bool
 	AggregatorRejectForwardingRedirects bool
-
-	MasterCount int
 
 	ServiceAccountSigningKeyFile     string
 	ServiceAccountIssuer             serviceaccount.TokenGenerator
@@ -104,7 +115,6 @@ func NewOptions() *Options {
 
 		EnableLogsHandler:                   true,
 		EventTTL:                            1 * time.Hour,
-		MasterCount:                         1,
 		AggregatorRejectForwardingRedirects: true,
 	}
 
@@ -144,10 +154,6 @@ func (s *Options) AddFlags(fss *cliflag.NamedFlagSets) {
 		"If non-zero, throttle each user connection to this number of bytes/sec. "+
 		"Currently only applies to long-running requests.")
 
-	fs.IntVar(&s.MasterCount, "apiserver-count", s.MasterCount,
-		"The number of apiservers running in the cluster, must be a positive number. (In use when --endpoint-reconciler-type=master-count is enabled.)")
-	fs.MarkDeprecated("apiserver-count", "apiserver-count is deprecated and will be removed in a future version.")
-
 	fs.StringVar(&s.ProxyClientCertFile, "proxy-client-cert-file", s.ProxyClientCertFile, ""+
 		"Client certificate used to prove the identity of the aggregator or kube-apiserver "+
 		"when it must call out during a request. This includes proxying requests to a user "+
@@ -160,6 +166,20 @@ func (s *Options) AddFlags(fss *cliflag.NamedFlagSets) {
 		"Private key for the client certificate used to prove the identity of the aggregator or kube-apiserver "+
 		"when it must call out during a request. This includes proxying requests to a user "+
 		"api-server and calling out to webhook admission plugins.")
+
+	fs.StringVar(&s.PeerCAFile, "peer-ca-file", s.PeerCAFile,
+		"If set and the UnknownVersionInteroperabilityProxy feature gate is enabled, this file will be used to verify serving certificates of peer kube-apiservers. "+
+			"This flag is only used in clusters configured with multiple kube-apiservers for high availability.")
+
+	fs.StringVar(&s.PeerAdvertiseAddress.PeerAdvertiseIP, "peer-advertise-ip", s.PeerAdvertiseAddress.PeerAdvertiseIP,
+		"If set and the UnknownVersionInteroperabilityProxy feature gate is enabled, this IP will be used by peer kube-apiservers to proxy requests to this kube-apiserver "+
+			"when the request cannot be handled by the peer due to version skew between the kube-apiservers. "+
+			"This flag is only used in clusters configured with multiple kube-apiservers for high availability. ")
+
+	fs.StringVar(&s.PeerAdvertiseAddress.PeerAdvertisePort, "peer-advertise-port", s.PeerAdvertiseAddress.PeerAdvertisePort,
+		"If set and the UnknownVersionInteroperabilityProxy feature gate is enabled, this port will be used by peer kube-apiservers to proxy requests to this kube-apiserver "+
+			"when the request cannot be handled by the peer due to version skew between the kube-apiservers. "+
+			"This flag is only used in clusters configured with multiple kube-apiservers for high availability. ")
 
 	fs.BoolVar(&s.EnableAggregatorRouting, "enable-aggregator-routing", s.EnableAggregatorRouting,
 		"Turns on aggregator routing requests to endpoints IP rather than cluster IP.")
@@ -202,6 +222,9 @@ func (o *Options) Complete(alternateDNS []string, alternateIPs []net.IP) (Comple
 		klog.Infof("external host was not specified, using %v", completed.GenericServerRunOptions.ExternalHost)
 	}
 
+	// put authorization options in final state
+	completed.Authorization.Complete()
+	// adjust authentication for completed authorization
 	completed.Authentication.ApplyAuthorization(completed.Authorization)
 
 	// Use (ServiceAccountSigningKeyFile != "") as a proxy to the user enabling

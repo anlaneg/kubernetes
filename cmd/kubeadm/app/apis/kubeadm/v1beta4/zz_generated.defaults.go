@@ -32,12 +32,31 @@ func RegisterDefaults(scheme *runtime.Scheme) error {
 	scheme.AddTypeDefaultingFunc(&ClusterConfiguration{}, func(obj interface{}) { SetObjectDefaults_ClusterConfiguration(obj.(*ClusterConfiguration)) })
 	scheme.AddTypeDefaultingFunc(&InitConfiguration{}, func(obj interface{}) { SetObjectDefaults_InitConfiguration(obj.(*InitConfiguration)) })
 	scheme.AddTypeDefaultingFunc(&JoinConfiguration{}, func(obj interface{}) { SetObjectDefaults_JoinConfiguration(obj.(*JoinConfiguration)) })
+	scheme.AddTypeDefaultingFunc(&ResetConfiguration{}, func(obj interface{}) { SetObjectDefaults_ResetConfiguration(obj.(*ResetConfiguration)) })
 	return nil
 }
 
 func SetObjectDefaults_ClusterConfiguration(in *ClusterConfiguration) {
 	SetDefaults_ClusterConfiguration(in)
+	if in.Etcd.Local != nil {
+		for i := range in.Etcd.Local.ExtraEnvs {
+			a := &in.Etcd.Local.ExtraEnvs[i]
+			SetDefaults_EnvVar(a)
+		}
+	}
 	SetDefaults_APIServer(&in.APIServer)
+	for i := range in.APIServer.ControlPlaneComponent.ExtraEnvs {
+		a := &in.APIServer.ControlPlaneComponent.ExtraEnvs[i]
+		SetDefaults_EnvVar(a)
+	}
+	for i := range in.ControllerManager.ExtraEnvs {
+		a := &in.ControllerManager.ExtraEnvs[i]
+		SetDefaults_EnvVar(a)
+	}
+	for i := range in.Scheduler.ExtraEnvs {
+		a := &in.Scheduler.ExtraEnvs[i]
+		SetDefaults_EnvVar(a)
+	}
 }
 
 func SetObjectDefaults_InitConfiguration(in *InitConfiguration) {
@@ -55,4 +74,8 @@ func SetObjectDefaults_JoinConfiguration(in *JoinConfiguration) {
 		SetDefaults_JoinControlPlane(in.ControlPlane)
 		SetDefaults_APIEndpoint(&in.ControlPlane.LocalAPIEndpoint)
 	}
+}
+
+func SetObjectDefaults_ResetConfiguration(in *ResetConfiguration) {
+	SetDefaults_ResetConfiguration(in)
 }

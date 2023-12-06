@@ -53,6 +53,8 @@ var etcdBackoff = wait.Backoff{
 	Jitter:   0.1,
 }
 
+// ErrNoMemberIDForPeerURL is returned when it is not possible to obtain a member ID
+// from a given peer URL
 var ErrNoMemberIDForPeerURL = errors.New("no member id found for peer URL")
 
 // ClusterInterrogator is an interface to get etcd cluster related information
@@ -362,8 +364,11 @@ func (c *Client) RemoveMember(id uint64) ([]Member, error) {
 
 	// Returns the updated list of etcd members
 	ret := []Member{}
-	for _, m := range resp.Members {
-		ret = append(ret, Member{Name: m.Name, PeerURL: m.PeerURLs[0]})
+	if resp != nil {
+		for _, m := range resp.Members {
+			ret = append(ret, Member{Name: m.Name, PeerURL: m.PeerURLs[0]})
+		}
+
 	}
 
 	return ret, nil

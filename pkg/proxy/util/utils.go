@@ -17,9 +17,7 @@ limitations under the License.
 package util
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -29,9 +27,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/sets"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/events"
 	utilsysctl "k8s.io/component-helpers/node/util/sysctl"
 	helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
+	"k8s.io/kubernetes/pkg/features"
 	netutils "k8s.io/utils/net"
 
 	"k8s.io/klog/v2"
@@ -43,14 +43,6 @@ const (
 
 	// IPv6ZeroCIDR is the CIDR block for the whole IPv6 address space
 	IPv6ZeroCIDR = "::/0"
-)
-
-var (
-	// ErrAddressNotAllowed indicates the address is not allowed
-	ErrAddressNotAllowed = errors.New("address not allowed")
-
-	// ErrNoAddresses indicates there are no addresses for the hostname
-	ErrNoAddresses = errors.New("no addresses for hostname")
 )
 
 // isValidEndpoint checks that the given host / port pair are valid endpoint
@@ -95,44 +87,9 @@ func IsLoopBack(ip string) bool {
 	return false
 }
 
-// IsProxyableIP checks if a given IP address is permitted to be proxied
-func IsProxyableIP(ip string) error {
-	netIP := netutils.ParseIPSloppy(ip)
-	if netIP == nil {
-		return ErrAddressNotAllowed
-	}
-	return isProxyableIP(netIP)
-}
-
-func isProxyableIP(ip net.IP) error {
-	if !ip.IsGlobalUnicast() {
-		return ErrAddressNotAllowed
-	}
-	return nil
-}
-
 // Resolver is an interface for net.Resolver
 type Resolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
-}
-
-// IsProxyableHostname checks if the IP addresses for a given hostname are permitted to be proxied
-func IsProxyableHostname(ctx context.Context, resolv Resolver, hostname string) error {
-	resp, err := resolv.LookupIPAddr(ctx, hostname)
-	if err != nil {
-		return err
-	}
-
-	if len(resp) == 0 {
-		return ErrNoAddresses
-	}
-
-	for _, host := range resp {
-		if err := isProxyableIP(host.IP); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // GetLocalAddrs returns a list of all network addresses on the local system
@@ -227,7 +184,7 @@ func MapIPsByIPFamily(ipStrings []string) map[v1.IPFamily][]string {
 	ipFamilyMap := map[v1.IPFamily][]string{}
 	for _, ip := range ipStrings {
 		// Handle only the valid IPs
-		if ipFamily, err := getIPFamilyFromIP(ip); err == nil {
+		if ipFamily := GetIPFamilyFromIP(ip); ipFamily != v1.IPFamilyUnknown {
 			ipFamilyMap[ipFamily] = append(ipFamilyMap[ipFamily], ip)
 		} else {
 			// this function is called in multiple places. All of which
@@ -249,7 +206,7 @@ func MapCIDRsByIPFamily(cidrStrings []string) map[v1.IPFamily][]string {
 	ipFamilyMap := map[v1.IPFamily][]string{}
 	for _, cidr := range cidrStrings {
 		// Handle only the valid CIDRs
-		if ipFamily, err := getIPFamilyFromCIDR(cidr); err == nil {
+		if ipFamily := getIPFamilyFromCIDR(cidr); ipFamily != v1.IPFamilyUnknown {
 			ipFamilyMap[ipFamily] = append(ipFamilyMap[ipFamily], cidr)
 		} else {
 			klog.ErrorS(nil, "Skipping invalid CIDR", "cidr", cidr)
@@ -258,27 +215,26 @@ func MapCIDRsByIPFamily(cidrStrings []string) map[v1.IPFamily][]string {
 	return ipFamilyMap
 }
 
-func getIPFamilyFromIP(ipStr string) (v1.IPFamily, error) {
-	netIP := netutils.ParseIPSloppy(ipStr)
-	if netIP == nil {
-		return "", ErrAddressNotAllowed
-	}
-
-	if netutils.IsIPv6(netIP) {
-		return v1.IPv6Protocol, nil
-	}
-	return v1.IPv4Protocol, nil
+// GetIPFamilyFromIP Returns the IP family of ipStr, or IPFamilyUnknown if ipStr can't be parsed as an IP
+func GetIPFamilyFromIP(ipStr string) v1.IPFamily {
+	return convertToV1IPFamily(netutils.IPFamilyOfString(ipStr))
 }
 
-func getIPFamilyFromCIDR(cidrStr string) (v1.IPFamily, error) {
-	_, netCIDR, err := netutils.ParseCIDRSloppy(cidrStr)
-	if err != nil {
-		return "", ErrAddressNotAllowed
+// Returns the IP family of cidrStr, or IPFamilyUnknown if cidrStr can't be parsed as a CIDR
+func getIPFamilyFromCIDR(cidrStr string) v1.IPFamily {
+	return convertToV1IPFamily(netutils.IPFamilyOfCIDRString(cidrStr))
+}
+
+// Convert netutils.IPFamily to v1.IPFamily
+func convertToV1IPFamily(ipFamily netutils.IPFamily) v1.IPFamily {
+	switch ipFamily {
+	case netutils.IPv4:
+		return v1.IPv4Protocol
+	case netutils.IPv6:
+		return v1.IPv6Protocol
 	}
-	if netutils.IsIPv6CIDR(netCIDR) {
-		return v1.IPv6Protocol, nil
-	}
-	return v1.IPv4Protocol, nil
+
+	return v1.IPFamilyUnknown
 }
 
 // OtherIPFamily returns the other ip family
@@ -363,67 +319,6 @@ func GetClusterIPByFamily(ipFamily v1.IPFamily, service *v1.Service) string {
 	return ""
 }
 
-type LineBuffer struct {
-	b     bytes.Buffer
-	lines int
-}
-
-// Write takes a list of arguments, each a string or []string, joins all the
-// individual strings with spaces, terminates with newline, and writes to buf.
-// Any other argument type will panic.
-func (buf *LineBuffer) Write(args ...interface{}) {
-	for i, arg := range args {
-		if i > 0 {
-			buf.b.WriteByte(' ')
-		}
-		switch x := arg.(type) {
-		case string:
-			buf.b.WriteString(x)
-		case []string:
-			for j, s := range x {
-				if j > 0 {
-					buf.b.WriteByte(' ')
-				}
-				buf.b.WriteString(s)
-			}
-		default:
-			panic(fmt.Sprintf("unknown argument type: %T", x))
-		}
-	}
-	buf.b.WriteByte('\n')
-	buf.lines++
-}
-
-// WriteBytes writes bytes to buffer, and terminates with newline.
-func (buf *LineBuffer) WriteBytes(bytes []byte) {
-	buf.b.Write(bytes)
-	buf.b.WriteByte('\n')
-	buf.lines++
-}
-
-// Reset clears buf
-func (buf *LineBuffer) Reset() {
-	buf.b.Reset()
-	buf.lines = 0
-}
-
-// Bytes returns the contents of buf as a []byte
-func (buf *LineBuffer) Bytes() []byte {
-	return buf.b.Bytes()
-}
-
-// String returns the contents of buf as a string
-func (buf *LineBuffer) String() string {
-	return buf.b.String()
-}
-
-// Lines returns the number of lines in buf. Note that more precisely, this returns the
-// number of times Write() or WriteBytes() was called; it assumes that you never wrote
-// any newlines to the buffer yourself.
-func (buf *LineBuffer) Lines() int {
-	return buf.lines
-}
-
 // RevertPorts is closing ports in replacementPortsMap but not in originalPortsMap. In other words, it only
 // closes the ports opened in this sync.
 func RevertPorts(replacementPortsMap, originalPortsMap map[netutils.LocalPort]netutils.Closeable) {
@@ -434,4 +329,14 @@ func RevertPorts(replacementPortsMap, originalPortsMap map[netutils.LocalPort]ne
 			v.Close()
 		}
 	}
+}
+
+func IsVIPMode(ing v1.LoadBalancerIngress) bool {
+	if !utilfeature.DefaultFeatureGate.Enabled(features.LoadBalancerIPMode) {
+		return true // backwards compat
+	}
+	if ing.IPMode == nil {
+		return true
+	}
+	return *ing.IPMode == v1.LoadBalancerIPModeVIP
 }

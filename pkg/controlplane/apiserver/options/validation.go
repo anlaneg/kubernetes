@@ -25,6 +25,7 @@ import (
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	aggregatorscheme "k8s.io/kube-aggregator/pkg/apiserver/scheme"
+	"k8s.io/kubernetes/pkg/features"
 
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 )
@@ -50,15 +51,15 @@ func validateTokenRequest(options *Options) []error {
 }
 
 func validateAPIPriorityAndFairness(options *Options) []error {
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIPriorityAndFairness) && options.GenericServerRunOptions.EnablePriorityAndFairness {
+	if options.Features.EnablePriorityAndFairness {
 		// If none of the following runtime config options are specified,
 		// APF is assumed to be turned on. The internal APF controller uses
-		// v1beta3 so it should be enabled.
+		// v1 so it should be enabled.
 		enabledAPIString := options.APIEnablement.RuntimeConfig.String()
-		testConfigs := []string{"flowcontrol.apiserver.k8s.io/v1beta3", "api/beta", "api/all"} // in the order of precedence
+		testConfigs := []string{"flowcontrol.apiserver.k8s.io/v1", "api/ga", "api/all"} // in the order of precedence
 		for _, testConfig := range testConfigs {
 			if strings.Contains(enabledAPIString, fmt.Sprintf("%s=false", testConfig)) {
-				return []error{fmt.Errorf("--runtime-config=%s=false conflicts with --enable-priority-and-fairness=true and --feature-gates=APIPriorityAndFairness=true", testConfig)}
+				return []error{fmt.Errorf("--runtime-config=%s=false conflicts with --enable-priority-and-fairness=true", testConfig)}
 			}
 			if strings.Contains(enabledAPIString, fmt.Sprintf("%s=true", testConfig)) {
 				return nil
@@ -69,12 +70,36 @@ func validateAPIPriorityAndFairness(options *Options) []error {
 	return nil
 }
 
+func validateUnknownVersionInteroperabilityProxyFeature() []error {
+	if utilfeature.DefaultFeatureGate.Enabled(features.UnknownVersionInteroperabilityProxy) {
+		if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.StorageVersionAPI) {
+			return nil
+		}
+		return []error{fmt.Errorf("UnknownVersionInteroperabilityProxy feature requires StorageVersionAPI feature flag to be enabled")}
+	}
+	return nil
+}
+
+func validateUnknownVersionInteroperabilityProxyFlags(options *Options) []error {
+	err := []error{}
+	if !utilfeature.DefaultFeatureGate.Enabled(features.UnknownVersionInteroperabilityProxy) {
+		if options.PeerCAFile != "" {
+			err = append(err, fmt.Errorf("--peer-ca-file requires UnknownVersionInteroperabilityProxy feature to be turned on"))
+		}
+		if options.PeerAdvertiseAddress.PeerAdvertiseIP != "" {
+			err = append(err, fmt.Errorf("--peer-advertise-ip requires UnknownVersionInteroperabilityProxy feature to be turned on"))
+		}
+		if options.PeerAdvertiseAddress.PeerAdvertisePort != "" {
+			err = append(err, fmt.Errorf("--peer-advertise-port requires UnknownVersionInteroperabilityProxy feature to be turned on"))
+		}
+	}
+	return err
+}
+
 // Validate checks Options and return a slice of found errs.
 func (s *Options) Validate() []error {
 	var errs []error
-	if s.MasterCount <= 0 {
-		errs = append(errs, fmt.Errorf("--apiserver-count should be a positive number, but value '%d' provided", s.MasterCount))
-	}
+
 	errs = append(errs, s.Etcd.Validate()...)
 	errs = append(errs, validateAPIPriorityAndFairness(s)...)
 	errs = append(errs, s.SecureServing.Validate()...)
@@ -85,6 +110,8 @@ func (s *Options) Validate() []error {
 	errs = append(errs, s.APIEnablement.Validate(legacyscheme.Scheme, apiextensionsapiserver.Scheme, aggregatorscheme.Scheme)...)
 	errs = append(errs, validateTokenRequest(s)...)
 	errs = append(errs, s.Metrics.Validate()...)
+	errs = append(errs, validateUnknownVersionInteroperabilityProxyFeature()...)
+	errs = append(errs, validateUnknownVersionInteroperabilityProxyFlags(s)...)
 
 	return errs
 }

@@ -17,11 +17,8 @@ limitations under the License.
 package util
 
 import (
-	"context"
-	"math/rand"
 	"net"
 	"reflect"
-	"strings"
 	"testing"
 
 	v1 "k8s.io/api/core/v1"
@@ -93,76 +90,6 @@ func TestBuildPortsToEndpointsMap(t *testing.T) {
 	portsToEndpoints := BuildPortsToEndpointsMap(endpoints)
 	if !reflect.DeepEqual(expectedPortsToEndpoints, portsToEndpoints) {
 		t.Errorf("expected ports to endpoints not seen")
-	}
-}
-
-func TestIsProxyableIP(t *testing.T) {
-	testCases := []struct {
-		ip   string
-		want error
-	}{
-		{"0.0.0.0", ErrAddressNotAllowed},
-		{"127.0.0.1", ErrAddressNotAllowed},
-		{"127.0.0.2", ErrAddressNotAllowed},
-		{"169.254.169.254", ErrAddressNotAllowed},
-		{"169.254.1.1", ErrAddressNotAllowed},
-		{"224.0.0.0", ErrAddressNotAllowed},
-		{"10.0.0.1", nil},
-		{"192.168.0.1", nil},
-		{"172.16.0.1", nil},
-		{"8.8.8.8", nil},
-		{"::", ErrAddressNotAllowed},
-		{"::1", ErrAddressNotAllowed},
-		{"fe80::", ErrAddressNotAllowed},
-		{"ff02::", ErrAddressNotAllowed},
-		{"ff01::", ErrAddressNotAllowed},
-		{"2600::", nil},
-		{"1", ErrAddressNotAllowed},
-		{"", ErrAddressNotAllowed},
-	}
-
-	for i := range testCases {
-		got := IsProxyableIP(testCases[i].ip)
-		if testCases[i].want != got {
-			t.Errorf("case %d: expected %v, got %v", i, testCases[i].want, got)
-		}
-	}
-}
-
-type dummyResolver struct {
-	ips []string
-	err error
-}
-
-func (r *dummyResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
-	if r.err != nil {
-		return nil, r.err
-	}
-	resp := []net.IPAddr{}
-	for _, ipString := range r.ips {
-		resp = append(resp, net.IPAddr{IP: netutils.ParseIPSloppy(ipString)})
-	}
-	return resp, nil
-}
-
-func TestIsProxyableHostname(t *testing.T) {
-	testCases := []struct {
-		hostname string
-		ips      []string
-		want     error
-	}{
-		{"k8s.io", []string{}, ErrNoAddresses},
-		{"k8s.io", []string{"8.8.8.8"}, nil},
-		{"k8s.io", []string{"169.254.169.254"}, ErrAddressNotAllowed},
-		{"k8s.io", []string{"127.0.0.1", "8.8.8.8"}, ErrAddressNotAllowed},
-	}
-
-	for i := range testCases {
-		resolv := dummyResolver{ips: testCases[i].ips}
-		got := IsProxyableHostname(context.Background(), &resolv, testCases[i].hostname)
-		if testCases[i].want != got {
-			t.Errorf("case %d: expected %v, got %v", i, testCases[i].want, got)
-		}
 	}
 }
 
@@ -771,150 +698,11 @@ func TestRevertPorts(t *testing.T) {
 			}
 		}
 		for _, lp := range tc.existingPorts {
-			if existingPortsMap[lp].(*fakeClosable).closed == true {
+			if existingPortsMap[lp].(*fakeClosable).closed {
 				t.Errorf("Expect existing localport %v to be false in test case %v", lp, i)
 			}
 		}
 	}
-}
-
-func TestLineBufferWrite(t *testing.T) {
-	testCases := []struct {
-		name     string
-		input    []interface{}
-		expected string
-	}{
-		{
-			name:     "none",
-			input:    []interface{}{},
-			expected: "\n",
-		},
-		{
-			name:     "one string",
-			input:    []interface{}{"test1"},
-			expected: "test1\n",
-		},
-		{
-			name:     "one slice",
-			input:    []interface{}{[]string{"test1", "test2"}},
-			expected: "test1 test2\n",
-		},
-		{
-			name:     "mixed",
-			input:    []interface{}{"s1", "s2", []string{"s3", "s4"}, "", "s5", []string{}, []string{"s6"}, "s7"},
-			expected: "s1 s2 s3 s4  s5  s6 s7\n",
-		},
-	}
-	testBuffer := LineBuffer{}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			testBuffer.Reset()
-			testBuffer.Write(testCase.input...)
-			if want, got := testCase.expected, testBuffer.String(); !strings.EqualFold(want, got) {
-				t.Fatalf("write word is %v\n expected: %q, got: %q", testCase.input, want, got)
-			}
-			if testBuffer.Lines() != 1 {
-				t.Fatalf("expected 1 line, got: %d", testBuffer.Lines())
-			}
-		})
-	}
-}
-
-func TestLineBufferWritePanic(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("did not panic")
-		}
-	}()
-	testBuffer := LineBuffer{}
-	testBuffer.Write("string", []string{"a", "slice"}, 1234)
-}
-
-func TestLineBufferWriteBytes(t *testing.T) {
-	testCases := []struct {
-		name     string
-		bytes    []byte
-		expected string
-	}{
-		{
-			name:     "empty bytes",
-			bytes:    []byte{},
-			expected: "\n",
-		},
-		{
-			name:     "test bytes",
-			bytes:    []byte("test write bytes line"),
-			expected: "test write bytes line\n",
-		},
-	}
-
-	testBuffer := LineBuffer{}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			testBuffer.Reset()
-			testBuffer.WriteBytes(testCase.bytes)
-			if want, got := testCase.expected, testBuffer.String(); !strings.EqualFold(want, got) {
-				t.Fatalf("write bytes is %v\n expected: %s, got: %s", testCase.bytes, want, got)
-			}
-		})
-	}
-}
-
-func TestWriteCountLines(t *testing.T) {
-
-	testCases := []struct {
-		name     string
-		expected int
-	}{
-		{
-			name:     "write no line",
-			expected: 0,
-		},
-		{
-			name:     "write one line",
-			expected: 1,
-		},
-		{
-			name:     "write 100 lines",
-			expected: 100,
-		},
-		{
-			name:     "write 1000 lines",
-			expected: 1000,
-		},
-		{
-			name:     "write 10000 lines",
-			expected: 10000,
-		},
-		{
-			name:     "write 100000 lines",
-			expected: 100000,
-		},
-	}
-	testBuffer := LineBuffer{}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			testBuffer.Reset()
-			for i := 0; i < testCase.expected; i++ {
-				testBuffer.Write(randSeq())
-			}
-			n := testBuffer.Lines()
-			if n != testCase.expected {
-				t.Fatalf("lines expected: %d, got: %d", testCase.expected, n)
-			}
-		})
-	}
-}
-
-// obtained from https://stackoverflow.com/a/22892986
-var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-func randSeq() string {
-	b := make([]rune, 30)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
-	}
-	return string(b)
 }
 
 func mustParseIPAddr(str string) net.Addr {

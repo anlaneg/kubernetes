@@ -22,9 +22,13 @@ import (
 	"net"
 	"strings"
 
+	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/kubernetes/pkg/features"
 	netutils "k8s.io/utils/net"
+
+	controlplaneapiserver "k8s.io/kubernetes/pkg/controlplane/apiserver/options"
+	"k8s.io/kubernetes/pkg/controlplane/reconcilers"
+	"k8s.io/kubernetes/pkg/features"
 )
 
 // TODO: Longer term we should read this from some config store, rather than a flag.
@@ -33,9 +37,6 @@ func validateClusterIPFlags(options Extra) []error {
 	var errs []error
 	// maxCIDRBits is used to define the maximum CIDR size for the cluster ip(s)
 	maxCIDRBits := 20
-	if utilfeature.DefaultFeatureGate.Enabled(features.MultiCIDRServiceAllocator) {
-		maxCIDRBits = 64
-	}
 
 	// validate that primary has been processed by user provided values or it has been defaulted
 	if options.PrimaryServiceClusterIPRange.IP == nil {
@@ -47,10 +48,12 @@ func validateClusterIPFlags(options Extra) []error {
 		errs = append(errs, errors.New("--service-cluster-ip-range must not contain more than two entries"))
 	}
 
-	// Complete() expected to have set Primary* and Secondary*
-	// primary CIDR validation
-	if err := validateMaxCIDRRange(options.PrimaryServiceClusterIPRange, maxCIDRBits, "--service-cluster-ip-range"); err != nil {
-		errs = append(errs, err)
+	// Complete() expected to have set Primary* and Secondary
+	if !utilfeature.DefaultFeatureGate.Enabled(features.MultiCIDRServiceAllocator) {
+		// primary CIDR validation
+		if err := validateMaxCIDRRange(options.PrimaryServiceClusterIPRange, maxCIDRBits, "--service-cluster-ip-range"); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	secondaryServiceClusterIPRangeUsed := (options.SecondaryServiceClusterIPRange.IP != nil)
@@ -68,9 +71,10 @@ func validateClusterIPFlags(options Extra) []error {
 		if !dualstack {
 			errs = append(errs, errors.New("--service-cluster-ip-range[0] and --service-cluster-ip-range[1] must be of different IP family"))
 		}
-
-		if err := validateMaxCIDRRange(options.SecondaryServiceClusterIPRange, maxCIDRBits, "--service-cluster-ip-range[1]"); err != nil {
-			errs = append(errs, err)
+		if !utilfeature.DefaultFeatureGate.Enabled(features.MultiCIDRServiceAllocator) {
+			if err := validateMaxCIDRRange(options.SecondaryServiceClusterIPRange, maxCIDRBits, "--service-cluster-ip-range[1]"); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 
@@ -102,13 +106,38 @@ func validateServiceNodePort(options Extra) []error {
 	return errs
 }
 
+func validatePublicIPServiceClusterIPRangeIPFamilies(extra Extra, generic genericoptions.ServerRunOptions) []error {
+	// The "kubernetes.default" Service is SingleStack based on the configured ServiceIPRange.
+	// If the bootstrap controller reconcile the kubernetes.default Service and Endpoints, it must
+	// guarantee that the Service ClusterIPRepairConfig and the associated Endpoints have the same IP family, or
+	// it will not work for clients because of the IP family mismatch.
+	// TODO: revisit for dual-stack https://github.com/kubernetes/enhancements/issues/2438
+	if reconcilers.Type(extra.EndpointReconcilerType) != reconcilers.NoneEndpointReconcilerType {
+		serviceIPRange, _, err := controlplaneapiserver.ServiceIPRange(extra.PrimaryServiceClusterIPRange)
+		if err != nil {
+			return []error{fmt.Errorf("error determining service IP ranges: %w", err)}
+		}
+		if netutils.IsIPv4CIDR(&serviceIPRange) != netutils.IsIPv4(generic.AdvertiseAddress) {
+			return []error{fmt.Errorf("service IP family %q must match public address family %q", extra.PrimaryServiceClusterIPRange.String(), generic.AdvertiseAddress.String())}
+		}
+	}
+
+	return nil
+}
+
 // Validate checks ServerRunOptions and return a slice of found errs.
 func (s CompletedOptions) Validate() []error {
 	var errs []error
 
 	errs = append(errs, s.CompletedOptions.Validate()...)
+	errs = append(errs, s.CloudProvider.Validate()...)
 	errs = append(errs, validateClusterIPFlags(s.Extra)...)
 	errs = append(errs, validateServiceNodePort(s.Extra)...)
+	errs = append(errs, validatePublicIPServiceClusterIPRangeIPFamilies(s.Extra, *s.GenericServerRunOptions)...)
+
+	if s.MasterCount <= 0 {
+		errs = append(errs, fmt.Errorf("--apiserver-count should be a positive number, but value '%d' provided", s.MasterCount))
+	}
 
 	return errs
 }

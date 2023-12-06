@@ -165,6 +165,9 @@ type KubeControllerManagerConfiguration struct {
 	// TTLAfterFinishedControllerConfiguration holds configuration for
 	// TTLAfterFinishedController related features.
 	TTLAfterFinishedController TTLAfterFinishedControllerConfiguration
+	// ValidatingAdmissionPolicyStatusControllerConfiguration holds configuration for
+	// ValidatingAdmissionPolicyStatusController related features.
+	ValidatingAdmissionPolicyStatusController ValidatingAdmissionPolicyStatusControllerConfiguration
 }
 
 // AttachDetachControllerConfiguration contains elements describing AttachDetachController.
@@ -174,7 +177,7 @@ type AttachDetachControllerConfiguration struct {
 	// This flag enables or disables reconcile.  Is false by default, and thus enabled.
 	DisableAttachDetachReconcilerSync bool
 	// ReconcilerSyncLoopPeriod is the amount of time the reconciler sync states loop
-	// wait between successive executions. Is set to 5 sec by default.
+	// wait between successive executions. Is set to 60 sec by default.
 	ReconcilerSyncLoopPeriod metav1.Duration
 }
 
@@ -480,4 +483,13 @@ type TTLAfterFinishedControllerConfiguration struct {
 	// concurrentTTLSyncs is the number of TTL-after-finished collector workers that are
 	// allowed to sync concurrently.
 	ConcurrentTTLSyncs int32
+}
+
+// ValidatingAdmissionPolicyStatusControllerConfiguration contains elements describing ValidatingAdmissionPolicyStatusController.
+type ValidatingAdmissionPolicyStatusControllerConfiguration struct {
+	// ConcurrentPolicySyncs is the number of policy objects that are
+	// allowed to sync concurrently. Larger number = quicker type checking,
+	// but more CPU (and network) load.
+	// The default value is 5.
+	ConcurrentPolicySyncs int32
 }

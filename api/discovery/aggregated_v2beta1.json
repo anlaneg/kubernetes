@@ -854,17 +854,17 @@
           "freshness": "Current",
           "resources": [
             {
-              "resource": "clustercidrs",
+              "resource": "ipaddresses",
               "responseKind": {
                 "group": "",
-                "kind": "ClusterCIDR",
+                "kind": "IPAddress",
                 "version": ""
               },
               "scope": "Cluster",
               "shortNames": [
-                "cc"
+                "ip"
               ],
-              "singularResource": "clustercidr",
+              "singularResource": "ipaddress",
               "verbs": [
                 "create",
                 "delete",
@@ -877,17 +877,29 @@
               ]
             },
             {
-              "resource": "ipaddresses",
+              "resource": "servicecidrs",
               "responseKind": {
                 "group": "",
-                "kind": "IPAddress",
+                "kind": "ServiceCIDR",
                 "version": ""
               },
               "scope": "Cluster",
-              "shortNames": [
-                "ip"
+              "singularResource": "servicecidr",
+              "subresources": [
+                {
+                  "responseKind": {
+                    "group": "",
+                    "kind": "ServiceCIDR",
+                    "version": ""
+                  },
+                  "subresource": "status",
+                  "verbs": [
+                    "get",
+                    "patch",
+                    "update"
+                  ]
+                }
               ],
-              "singularResource": "ipaddress",
               "verbs": [
                 "create",
                 "delete",
@@ -1179,6 +1191,35 @@
             }
           ],
           "version": "v1"
+        },
+        {
+          "freshness": "Current",
+          "resources": [
+            {
+              "resource": "volumeattributesclasses",
+              "responseKind": {
+                "group": "",
+                "kind": "VolumeAttributesClass",
+                "version": ""
+              },
+              "scope": "Cluster",
+              "shortNames": [
+                "vac"
+              ],
+              "singularResource": "volumeattributesclass",
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
+            }
+          ],
+          "version": "v1alpha1"
         }
       ]
     },
@@ -1239,6 +1280,73 @@
             }
           ],
           "version": "v1"
+        },
+        {
+          "freshness": "Current",
+          "resources": [
+            {
+              "categories": [
+                "api-extensions"
+              ],
+              "resource": "validatingadmissionpolicies",
+              "responseKind": {
+                "group": "",
+                "kind": "ValidatingAdmissionPolicy",
+                "version": ""
+              },
+              "scope": "Cluster",
+              "singularResource": "validatingadmissionpolicy",
+              "subresources": [
+                {
+                  "responseKind": {
+                    "group": "",
+                    "kind": "ValidatingAdmissionPolicy",
+                    "version": ""
+                  },
+                  "subresource": "status",
+                  "verbs": [
+                    "get",
+                    "patch",
+                    "update"
+                  ]
+                }
+              ],
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
+            },
+            {
+              "categories": [
+                "api-extensions"
+              ],
+              "resource": "validatingadmissionpolicybindings",
+              "responseKind": {
+                "group": "",
+                "kind": "ValidatingAdmissionPolicyBinding",
+                "version": ""
+              },
+              "scope": "Cluster",
+              "singularResource": "validatingadmissionpolicybinding",
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
+            }
+          ],
+          "version": "v1beta1"
         },
         {
           "freshness": "Current",
@@ -1584,7 +1692,7 @@
               ]
             }
           ],
-          "version": "v1beta3"
+          "version": "v1"
         },
         {
           "freshness": "Current",
@@ -1660,7 +1768,7 @@
               ]
             }
           ],
-          "version": "v1beta2"
+          "version": "v1beta3"
         }
       ]
     },

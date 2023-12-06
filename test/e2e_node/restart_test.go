@@ -72,7 +72,7 @@ func waitForPodsCondition(ctx context.Context, f *framework.Framework, podCount 
 	return runningPods
 }
 
-var _ = SIGDescribe("Restart [Serial] [Slow] [Disruptive]", func() {
+var _ = SIGDescribe("Restart", framework.WithSerial(), framework.WithSlow(), framework.WithDisruptive(), func() {
 	const (
 		// Saturate the node. It's not necessary that all these pods enter
 		// Running/Ready, because we don't know the number of cores in the
@@ -90,7 +90,7 @@ var _ = SIGDescribe("Restart [Serial] [Slow] [Disruptive]", func() {
 	)
 
 	f := framework.NewDefaultFramework("restart-test")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 	ginkgo.Context("Container Runtime", func() {
 		ginkgo.Context("Network", func() {
 			ginkgo.It("should recover from ip leak", func(ctx context.Context) {
